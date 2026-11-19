@@ -1,0 +1,474 @@
+Screen {
+    background: transparent;
+    color: $foreground;
+    padding: 0;
+}
+
+#app-frame {
+    background: transparent;
+    border: solid $border;
+    padding: 0;
+    width: 1fr;
+    height: 1fr;
+}
+
+Container, Vertical, Horizontal, VerticalScroll, HorizontalScroll, Center, Middle {
+    background: transparent;
+    height: auto;
+}
+
+Static, Label {
+    background: transparent;
+    width: auto;
+    height: auto;
+}
+
+Input {
+    background: transparent;
+    border: none;
+    padding: 0;
+    height: 1;
+    width: 1fr;
+    color: $foreground;
+}
+
+Input:focus {
+    border: none;
+    background: transparent;
+}
+
+Input > .input--placeholder {
+    color: $text-muted;
+}
+
+Button {
+    background: $primary-muted;
+    color: $foreground;
+    border: none;
+    height: 1;
+    min-width: 3;
+    width: auto;
+    padding: 0;
+    margin-right: 1;
+}
+
+Button:hover {
+    background: $block-hover-background;
+    color: $foreground;
+}
+
+Button:focus, Button.-primary {
+    background: $accent;
+    color: $button-color-foreground;
+    text-style: bold;
+}
+
+Button.-primary:focus {
+    background: $accent-lighten-1;
+    color: $button-color-foreground;
+}
+
+Button.is-selected {
+    background: $accent;
+    color: $button-color-foreground;
+    text-style: bold;
+}
+
+SettingToggle {
+    background: transparent;
+    color: $foreground;
+    width: 1fr;
+    height: 1;
+}
+
+SettingToggle:hover {
+    background: $block-cursor-blurred-background;
+}
+
+SettingToggle:focus {
+    background: $block-cursor-background;
+}
+
+.panel, .panel-fill {
+    background: transparent;
+    border: solid $border;
+    border-title-color: $foreground;
+    border-title-style: bold;
+    border-subtitle-color: $accent;
+    border-subtitle-align: right;
+    padding: 0 1;
+    margin: 0;
+    width: 1fr;
+    height: auto;
+}
+
+.panel-fill {
+    height: 1fr;
+}
+
+.panel:focus-within, .panel-fill:focus-within {
+    border: solid $accent;
+    border-title-color: $accent;
+}
+
+#topbar {
+    height: 2;
+    width: 1fr;
+    margin: 0;
+}
+
+#main-scroll {
+    height: 1fr;
+    width: 1fr;
+    margin: 0 1;
+    background: transparent;
+    scrollbar-size: 1 1;
+}
+
+VerticalScroll, HorizontalScroll {
+    scrollbar-size: 1 1;
+}
+
+#now-playing {
+    height: 5;
+    width: 1fr;
+    margin: 0 1;
+    border: solid $border;
+    border-title-color: $foreground;
+    border-title-style: bold;
+    border-subtitle-color: $accent;
+    border-subtitle-align: right;
+    padding: 0 1;
+    background: transparent;
+}
+
+#now-playing:focus-within {
+    border: solid $accent;
+    border-title-color: $accent;
+}
+
+#np-title {
+    height: 1;
+    width: 1fr;
+}
+
+#np-spacer {
+    width: 1fr;
+    height: 1;
+}
+
+#np-prev, #np-play, #np-next, #np-shf, #np-rpt {
+    width: 4;
+    min-width: 4;
+    margin-right: 1;
+    content-align: center middle;
+}
+
+#np-rpt {
+    margin-right: 0;
+}
+
+#np-vol {
+    width: 21;
+    height: 1;
+    content-align: right middle;
+}
+
+#footer-hints {
+    height: 1;
+    width: 1fr;
+    margin: 0 1;
+    color: $text-muted;
+    background: transparent;
+}
+
+/* ── Home Player Workspace ────────────────────────── */
+
+HomeView {
+    height: 1fr;
+    overflow: hidden hidden;
+}
+
+#home-workspace {
+    layout: vertical;
+    width: 1fr;
+    height: 1fr;
+}
+
+#home-top {
+    layout: horizontal;
+    width: 1fr;
+    height: 1.55fr;
+}
+
+#home-bottom {
+    layout: horizontal;
+    width: 1fr;
+    height: 1fr;
+    min-height: 5;
+}
+
+#home-cover-panel {
+    width: 32;
+    height: 1fr;
+    min-height: 8;
+    margin: 0 1 0 0;
+}
+
+#home-main-panel {
+    width: 1fr;
+    height: 1fr;
+    min-height: 8;
+}
+
+#home-lyrics-panel {
+    width: 1fr;
+    height: 1fr;
+    margin: 0 1 0 0;
+}
+
+#home-cava-panel {
+    width: 1fr;
+    height: 1fr;
+}
+
+#home-cov-wrap {
+    width: 1fr;
+    height: 1fr;
+    align: center middle;
+}
+
+#home-p2-prompt-wrap {
+    width: 1fr;
+    height: auto;
+}
+
+
+#home-p2-sugg-scroll, #home-p2-list-scroll {
+    width: 1fr;
+    height: 1fr;
+    scrollbar-size: 1 1;
+}
+
+#home-details-scroll {
+    width: 1fr;
+    height: 1fr;
+    scrollbar-size: 1 1;
+}
+
+#home-details-scroll Static {
+    width: 1fr;
+}
+
+/* ── Modern Hero Detail Pages (Artist, Album, Playlist) ─────── */
+
+.detail-shell {
+    layout: vertical;
+    width: 1fr;
+    height: 1fr;
+}
+
+.hero-shell {
+    layout: horizontal;
+    width: 1fr;
+    height: auto;
+    margin: 0;
+}
+
+.hero-cover-panel {
+    width: auto;
+    height: auto;
+    margin: 0 1 0 0;
+}
+
+.hero-info-panel {
+    width: 1fr;
+    height: 1fr;
+}
+
+.hero-info-body {
+    layout: vertical;
+    width: 1fr;
+    height: 1fr;
+}
+
+.hero-bio-scroll {
+    width: 1fr;
+    height: 1fr;
+    min-height: 0;
+    scrollbar-size: 1 1;
+}
+
+.hero-bio-scroll Static {
+    width: 1fr;
+}
+
+.hero-actions {
+    layout: horizontal;
+    width: 1fr;
+    height: 1;
+    margin-top: 0;
+}
+
+.overview-section-label {
+    width: 1fr;
+    height: 1;
+    margin-top: 1;
+    color: $accent;
+    text-style: bold;
+}
+
+.overview-section-label-first {
+    width: 1fr;
+    height: 1;
+    margin-top: 0;
+    color: $accent;
+    text-style: bold;
+}
+
+.overview-grid {
+    layout: vertical;
+    width: 1fr;
+    height: auto;
+}
+
+.overview-grid.is-split {
+    layout: horizontal;
+    width: 1fr;
+    height: auto;
+}
+
+#art-ov-left {
+    width: 1fr;
+    height: auto;
+}
+
+.overview-grid.is-split #art-ov-left {
+    width: 1.38fr;
+    padding-right: 1;
+}
+
+#art-ov-right {
+    width: 1fr;
+    height: auto;
+    margin-top: 1;
+}
+
+.overview-grid.is-split #art-ov-right {
+    width: 1fr;
+    margin-top: 0;
+    padding-left: 1;
+    border-left: solid $border-blurred;
+}
+
+#art-ov-latest-wrap {
+    width: 1fr;
+    height: auto;
+}
+
+#art-ov-latest-card {
+    layout: horizontal;
+    width: 1fr;
+    height: auto;
+    margin-top: 0;
+}
+
+#art-ov-latest-meta {
+    layout: vertical;
+    width: 1fr;
+    height: auto;
+    padding-left: 1;
+}
+
+#art-ov-latest-actions {
+    layout: horizontal;
+    width: 1fr;
+    height: 1;
+    margin-top: 1;
+}
+
+#art-songs-media-wrap {
+    width: 1fr;
+    height: auto;
+}
+
+#art-songs-media-crumb {
+    width: 1fr;
+}
+
+/* ── Secondary Pages ────────────────────────────────────────── */
+
+ArtistView, AlbumView, PlaylistView, QueueView {
+    height: 1fr;
+    overflow: hidden hidden;
+}
+
+.main-content-panel {
+    width: 1fr;
+    height: 1fr;
+}
+
+.main-list-scroll {
+    width: 1fr;
+    height: 1fr;
+    scrollbar-size: 1 1;
+}
+
+#art-rel-crumb, #art-songs-crumb {
+    width: 1fr;
+}
+
+/* ── Shared Helpers & Settings/Library ──────────────────────── */
+
+.split-row {
+    height: auto;
+    width: 1fr;
+    layout: horizontal;
+}
+
+.split-col-left {
+    width: 1fr;
+    height: auto;
+    margin: 0 1 0 0;
+}
+
+.split-col-right {
+    width: 1fr;
+    height: auto;
+    margin: 0;
+}
+
+SettingsView {
+    height: 1fr;
+    overflow-y: auto;
+    scrollbar-size: 1 1;
+}
+
+#set-priv-panel, #set-disp-panel {
+    height: auto;
+    min-height: 9;
+}
+
+#set-play-panel, #set-lyr-panel {
+    height: auto;
+    min-height: 9;
+}
+
+.compact-row {
+    layout: horizontal;
+    width: 1fr;
+    height: 1;
+}
+
+.inline-label {
+    width: auto;
+    margin-right: 1;
+}
+
+.filter-row {
+    layout: horizontal;
+    width: 1fr;
+    height: 2;
+    border-bottom: solid $border-blurred;
+    margin-bottom: 0;
+}
