@@ -308,15 +308,7 @@ impl App {
         }
 
         // Keep right pane of PlaylistsView synced with selected playlist
-        let cur_pl_id = self.playlists.selected_playlist().map(|p| p.id.clone());
-        if cur_pl_id != self.last_selected_playlist_id {
-            self.last_selected_playlist_id = cur_pl_id.clone();
-            let tracks = cur_pl_id
-                .as_deref()
-                .and_then(|id| self.services.store.playlist_tracks(id).ok())
-                .unwrap_or_default();
-            self.playlists.set_selected_tracks(tracks);
-        }
+        self.sync_selected_playlist_tracks(false);
     }
 
     fn sync_cava_state(&self) {
@@ -460,7 +452,6 @@ impl App {
             }
             BgMsg::PlaylistUploaded(res) => match res {
                 Ok(title) => {
-                    self.last_selected_playlist_id = None;
                     self.reload_local_collections();
                     self.set_toast(format!("Uploaded \"{title}\" to YouTube Music"));
                 }
@@ -468,9 +459,8 @@ impl App {
             },
             BgMsg::PlaylistImported(res) => match res {
                 Ok((id, title, count)) => {
-                    self.last_selected_playlist_id = None;
                     self.reload_local_collections();
-                    self.playlists.select_by_id(&id);
+                    self.select_user_playlist(&id);
                     self.set_toast(format!("Imported \"{title}\" ({count} tracks)"));
                 }
                 Err(err) => self.set_toast(format!("Import failed: {err}")),
@@ -724,7 +714,12 @@ impl App {
         } else {
             match self.active_tab {
                 0 => self.home.handle_action(action),
-                1 => self.playlists.handle_action(action),
+                1 => {
+                    self.sync_selected_playlist_tracks(false);
+                    let eff = self.playlists.handle_action(action);
+                    self.sync_selected_playlist_tracks(false);
+                    eff
+                }
                 2 => self.library.handle_action(action),
                 3 => self.queue.handle_action(action, &self.queue_snap),
                 4 => self.settings_view.handle_action(
@@ -759,7 +754,7 @@ impl App {
                         match self.services.sync.create_playlist(&name, "", true) {
                             Ok(pl) => {
                                 self.reload_local_collections();
-                                self.playlists.select_by_id(&pl.id);
+                                self.select_user_playlist(&pl.id);
                                 self.set_toast(format!("Created playlist \"{}\"", pl.title));
                             }
                             Err(err) => self.set_toast(format!("Create failed: {err}")),
@@ -848,7 +843,6 @@ impl App {
                     match c {
                         ConfirmAction::DeletePlaylist { playlist_id } => {
                             if let Ok(true) = self.services.sync.delete_playlist(&playlist_id) {
-                                self.last_selected_playlist_id = None;
                                 self.reload_local_collections();
                                 self.set_toast("Playlist deleted");
                             }
@@ -1088,8 +1082,7 @@ impl App {
                 self.active_tab = 1;
                 self.nav_stack.clear();
                 self.reload_local_collections();
-                self.playlists.select_by_id(&playlist_id);
-                self.last_selected_playlist_id = None;
+                self.select_user_playlist(&playlist_id);
             }
             ViewEffect::PlayUserPlaylistDirect { playlist_id } => {
                 match self.services.store.playlist_tracks(&playlist_id) {
@@ -1217,13 +1210,14 @@ impl App {
                 .sync
                 .toggle_save_collection(kind, &browse_id, &title, subtitle, thumb_url)
             {
-                Ok(true) => {
+                Ok(now_saved) => {
+                    self.update_nav_saved_state(kind, &browse_id, now_saved);
                     self.reload_local_collections();
-                    self.set_toast(format!("Saved \"{title}\" to Library"));
-                }
-                Ok(false) => {
-                    self.reload_local_collections();
-                    self.set_toast(format!("Removed \"{title}\" from Library"));
+                    if now_saved {
+                        self.set_toast(format!("Saved \"{title}\" to Library"));
+                    } else {
+                        self.set_toast(format!("Removed \"{title}\" from Library"));
+                    }
                 }
                 Err(err) => self.set_toast(format!("Save failed: {err}")),
             },
@@ -1242,23 +1236,33 @@ impl App {
             ViewEffect::RemovePlaylistTrack {
                 playlist_id,
                 position,
-            } => {
-                if let Ok(Some(_)) = self.services.sync.remove_track_at(&playlist_id, position) {
-                    self.last_selected_playlist_id = None;
+            } => match self.services.sync.remove_track_at(&playlist_id, position) {
+                Ok(Some(_)) => {
                     self.reload_local_collections();
                     self.set_toast("Removed track from playlist");
                 }
-            }
+                Ok(None) => {
+                    self.reload_local_collections();
+                }
+                Err(err) => self.set_toast(format!("Remove failed: {err}")),
+            },
             ViewEffect::MovePlaylistTrack {
                 playlist_id,
                 from,
                 to,
-            } => {
-                if let Ok(true) = self.services.sync.move_track(&playlist_id, from, to) {
-                    self.last_selected_playlist_id = None;
+            } => match self.services.sync.move_track(&playlist_id, from, to) {
+                Ok(true) => {
                     self.reload_local_collections();
                 }
-            }
+                Ok(false) => {
+                    self.playlists.track_cursor = from;
+                    self.reload_local_collections();
+                }
+                Err(err) => {
+                    self.playlists.track_cursor = from;
+                    self.set_toast(format!("Reorder failed: {err}"));
+                }
+            },
             ViewEffect::ExportPlaylist { playlist_id } => {
                 let dir = self.services.paths.data_dir.join("exports");
                 let _ = std::fs::create_dir_all(&dir);
@@ -1372,7 +1376,6 @@ impl App {
                 self.services.engine.try_send(AppCommand::ApplySettings {
                     settings: self.settings.clone(),
                 });
-                self.last_selected_playlist_id = None;
                 self.reload_local_collections();
                 self.trigger_home_refresh();
                 self.set_toast("Logged out -> no cookies ● (local playlists kept)");
@@ -1437,7 +1440,7 @@ impl App {
             match res {
                 Ok(pl) => {
                     self.reload_local_collections();
-                    self.playlists.select_by_id(&pl.id);
+                    self.select_user_playlist(&pl.id);
                     self.set_toast(format!(
                         "Imported \"{}\" ({} tracks)",
                         pl.title, pl.track_count
@@ -1642,16 +1645,70 @@ impl App {
             self.request_cover_image(url);
         }
 
-        if let Some(pl) = self.playlists.selected_playlist() {
-            let pid = pl.id.clone();
-            let trs = self
-                .services
-                .store
-                .playlist_tracks(&pid)
+        for page in &mut self.nav_stack {
+            let (kind, bid, saved_slot) = match page {
+                NavPage::Artist(v) => (
+                    SavedCollectionKind::Artist,
+                    v.browse_id.as_str(),
+                    &mut v.saved,
+                ),
+                NavPage::Album(v) => (
+                    SavedCollectionKind::Album,
+                    v.browse_id.as_str(),
+                    &mut v.saved,
+                ),
+                NavPage::PlaylistDetail(v) => (
+                    SavedCollectionKind::Playlist,
+                    v.browse_id.as_str(),
+                    &mut v.saved,
+                ),
+            };
+            if let Ok(is_saved) = self.services.store.is_collection_saved(&acct, kind, bid) {
+                *saved_slot = is_saved;
+            }
+        }
+
+        self.sync_selected_playlist_tracks(true);
+    }
+
+    fn sync_selected_playlist_tracks(&mut self, force: bool) {
+        let changed = self.playlists.selected_playlist().map(|p| p.id.as_str())
+            != self.last_selected_playlist_id.as_deref();
+        if changed || force {
+            let cur_pl_id = self.playlists.selected_playlist().map(|p| p.id.clone());
+            self.last_selected_playlist_id = cur_pl_id.clone();
+            if changed {
+                self.playlists.on_playlist_selection_changed();
+            }
+            let tracks = cur_pl_id
+                .as_deref()
+                .and_then(|id| self.services.store.playlist_tracks(id).ok())
                 .unwrap_or_default();
-            self.playlists.set_selected_tracks(trs);
-        } else {
-            self.playlists.set_selected_tracks(Vec::new());
+            self.playlists.set_selected_tracks(tracks);
+        }
+    }
+
+    fn select_user_playlist(&mut self, playlist_id: &str) {
+        self.playlists.select_by_id(playlist_id);
+        self.sync_selected_playlist_tracks(true);
+    }
+
+    fn update_nav_saved_state(&mut self, kind: SavedCollectionKind, browse_id: &str, saved: bool) {
+        for page in &mut self.nav_stack {
+            match (page, kind) {
+                (NavPage::Artist(v), SavedCollectionKind::Artist) if v.browse_id == browse_id => {
+                    v.saved = saved;
+                }
+                (NavPage::Album(v), SavedCollectionKind::Album) if v.browse_id == browse_id => {
+                    v.saved = saved;
+                }
+                (NavPage::PlaylistDetail(v), SavedCollectionKind::Playlist)
+                    if v.browse_id == browse_id =>
+                {
+                    v.saved = saved;
+                }
+                _ => {}
+            }
         }
     }
 

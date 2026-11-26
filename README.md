@@ -32,7 +32,7 @@ cargo build --release
 To build without GPL-3.0 `rustypipe` (pure MIT/Apache/MPL dependencies using `yt-dlp` only):
 
 ```bash
-cargo build --release --no-default-features --package musick-audio
+cargo build --release --no-default-features --package musick-tui
 ```
 
 ## CLI Subcommands

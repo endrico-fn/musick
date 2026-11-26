@@ -14,7 +14,7 @@ use musick_tui::keymap::Action;
 use musick_tui::theme::UNICODE_ICONS;
 use musick_tui::views::{
     HomeDiscoverTab, HomePanelMode, HomeView, LibraryTab, LibraryView, PlaylistsPane,
-    PlaylistsView, QueueView, RenderCtx, ViewEffect,
+    PlaylistsView, QueueView, RenderCtx, TrackSortMode, ViewEffect,
 };
 use musick_tui::widgets::{ActiveModal, BrailleSpinner, CoverRenderer};
 
@@ -781,6 +781,677 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
     wide.draw(|f| app.render(f)).unwrap();
     let sb_buf = buf_str(&wide);
     assert!(sb_buf.contains('┃') || sb_buf.contains('│'));
+
+    engine_handle.send(AppCommand::Shutdown).await;
+    let _ = engine_join.await;
+}
+
+fn sample_track_with(id: &str, title: &str, artist: &str, duration: Option<u32>) -> Track {
+    Track {
+        video_id: id.into(),
+        title: title.into(),
+        artists: vec![ArtistRef {
+            name: artist.into(),
+            id: None,
+        }],
+        album: Some("Test Album".into()),
+        album_id: Some("MPREb_test".into()),
+        duration,
+        thumbs: Vec::new(),
+        plays: None,
+        video_type: Some("MUSIC_VIDEO_TYPE_ATV".into()),
+        set_video_id: None,
+        is_available: true,
+    }
+}
+
+#[test]
+fn playlists_pane_aware_filter_sort_remove_and_reorder_guards() {
+    use musick_core::{Playlist, PlaylistSummary};
+    use musick_tui::views::PlaylistDetailView;
+
+    let mut pl_view = PlaylistsView::new();
+    pl_view.set_playlists(vec![
+        UserPlaylist {
+            id: "p1".into(),
+            account_key: "local".into(),
+            remote_id: None,
+            title: "Night Drive".into(),
+            description: String::new(),
+            source: PlaylistSource::Local,
+            thumb_url: None,
+            remote_etag: None,
+            track_count: 4,
+            created_at: 1,
+            updated_at: 1,
+            last_synced_at: None,
+        },
+        UserPlaylist {
+            id: "p2".into(),
+            account_key: "local".into(),
+            remote_id: None,
+            title: "Morning Coffee".into(),
+            description: String::new(),
+            source: PlaylistSource::Local,
+            thumb_url: None,
+            remote_etag: None,
+            track_count: 1,
+            created_at: 2,
+            updated_at: 2,
+            last_synced_at: None,
+        },
+    ]);
+    pl_view.set_selected_tracks(vec![
+        sample_track_with("v0", "Zebra Song", "Kavinsky", Some(260)),
+        sample_track_with("v1", "alpha wave", "Daft Punk", None),
+        sample_track_with("v2", "Midnight City", "M83", Some(180)),
+        sample_track_with("v3", "Alpha Dawn", "Kavinsky", Some(120)),
+    ]);
+
+    // 1. Pressing `o` in List pane does NOT change track_sort
+    assert_eq!(pl_view.pane, PlaylistsPane::List);
+    pl_view.handle_action(Action::CycleSort);
+    assert_eq!(pl_view.track_sort, TrackSortMode::Original);
+
+    // 2. Pressing `/` in List pane filters ONLY playlists, not tracks
+    pl_view.handle_action(Action::StartSearch);
+    assert!(pl_view.is_insert_mode());
+    assert!(pl_view.filter_active);
+    assert!(!pl_view.track_filter_active);
+    for ch in "night".chars() {
+        pl_view.handle_action(Action::InputChar(ch));
+    }
+    pl_view.handle_action(Action::InputSubmit);
+    assert!(!pl_view.is_insert_mode());
+    assert_eq!(pl_view.filtered_playlists().len(), 1);
+    assert_eq!(pl_view.filtered_playlists()[0].id, "p1");
+    assert!(pl_view.track_filter_query.is_empty());
+
+    // 3. Switch to Tracks pane: `o` cycles Original -> Title -> Duration -> Original
+    pl_view.handle_action(Action::MoveRight);
+    assert_eq!(pl_view.pane, PlaylistsPane::Tracks);
+    pl_view.track_cursor = 2;
+
+    pl_view.handle_action(Action::CycleSort);
+    assert_eq!(pl_view.track_sort, TrackSortMode::Title);
+    assert_eq!(pl_view.track_cursor, 0);
+    let title_order: Vec<(usize, &str)> = pl_view
+        .visible_tracks()
+        .into_iter()
+        .map(|(i, t)| (i, t.video_id.as_str()))
+        .collect();
+    assert_eq!(
+        title_order,
+        vec![(3, "v3"), (1, "v1"), (2, "v2"), (0, "v0")]
+    );
+
+    // `dd` while sorted by Title maps cursor 0 ("Alpha Dawn") -> true original index 3!
+    assert!(matches!(
+        pl_view.handle_action(Action::DeleteItem),
+        ViewEffect::RemovePlaylistTrack {
+            ref playlist_id,
+            position: 3
+        } if playlist_id == "p1"
+    ));
+
+    // `J` / `K` while non-Original sorted safely guards with StatusToast & does NOT move cursor
+    pl_view.track_cursor = 1;
+    assert!(matches!(
+        pl_view.handle_action(Action::MoveItemDown),
+        ViewEffect::StatusToast(msg) if msg.contains("Original")
+    ));
+    assert_eq!(pl_view.track_cursor, 1);
+    assert!(matches!(
+        pl_view.handle_action(Action::MoveItemUp),
+        ViewEffect::StatusToast(msg) if msg.contains("Original")
+    ));
+    assert_eq!(pl_view.track_cursor, 1);
+
+    // Cycle to Duration: ascending with None placed last
+    pl_view.handle_action(Action::CycleSort);
+    assert_eq!(pl_view.track_sort, TrackSortMode::Duration);
+    assert_eq!(pl_view.track_cursor, 0);
+    let dur_order: Vec<(usize, &str)> = pl_view
+        .visible_tracks()
+        .into_iter()
+        .map(|(i, t)| (i, t.video_id.as_str()))
+        .collect();
+    assert_eq!(dur_order, vec![(3, "v3"), (2, "v2"), (0, "v0"), (1, "v1")]);
+
+    // Cycle back to Original
+    pl_view.handle_action(Action::CycleSort);
+    assert_eq!(pl_view.track_sort, TrackSortMode::Original);
+
+    // 4. Pressing `/` in Tracks pane filters ONLY tracks (by title OR artist), keeping list filter intact
+    pl_view.handle_action(Action::StartSearch);
+    assert!(pl_view.is_insert_mode());
+    assert!(!pl_view.filter_active);
+    assert!(pl_view.track_filter_active);
+    for ch in "kavinsky".chars() {
+        pl_view.handle_action(Action::InputChar(ch));
+    }
+    pl_view.handle_action(Action::InputSubmit);
+    assert!(!pl_view.is_insert_mode());
+    assert_eq!(pl_view.filter_query, "night");
+    assert_eq!(pl_view.track_filter_query, "kavinsky");
+    let filt_tracks: Vec<(usize, &str)> = pl_view
+        .visible_tracks()
+        .into_iter()
+        .map(|(i, t)| (i, t.video_id.as_str()))
+        .collect();
+    assert_eq!(filt_tracks, vec![(0, "v0"), (3, "v3")]);
+
+    // Move to 2nd filtered match ("Alpha Dawn", orig_idx = 3) and press `dd` -> position 3!
+    pl_view.handle_action(Action::MoveDown);
+    assert_eq!(pl_view.track_cursor, 1);
+    assert!(matches!(
+        pl_view.handle_action(Action::DeleteItem),
+        ViewEffect::RemovePlaylistTrack {
+            ref playlist_id,
+            position: 3
+        } if playlist_id == "p1"
+    ));
+
+    // `J` / `K` while track-filtered guards with StatusToast & leaves track_cursor untouched
+    assert!(matches!(
+        pl_view.handle_action(Action::MoveItemUp),
+        ViewEffect::StatusToast(msg) if msg.contains("filter")
+    ));
+    assert_eq!(pl_view.track_cursor, 1);
+
+    // Combine filter + Title sort: "Alpha Dawn" (orig 3) comes before "Zebra Song" (orig 0)
+    pl_view.handle_action(Action::CycleSort);
+    assert_eq!(pl_view.track_sort, TrackSortMode::Title);
+    assert_eq!(pl_view.track_cursor, 0);
+    assert!(matches!(
+        pl_view.handle_action(Action::DeleteItem),
+        ViewEffect::RemovePlaylistTrack { position: 3, .. }
+    ));
+    assert!(matches!(
+        pl_view.handle_action(Action::MoveItemDown),
+        ViewEffect::StatusToast(msg) if msg.contains("filter") && msg.contains("Original")
+    ));
+
+    // Render filtered + sorted PlaylistsView at wide & narrow sizes without panic
+    let snap = PlaybackSnapshot::default();
+    let queue = QueueSnapshot::default();
+    let lyrics = Lyrics::default();
+    let cava = CavaFrame::default();
+    let settings = Settings::default();
+    let stats = CacheStats::default();
+    let ctx = make_ctx(&snap, &queue, &lyrics, &cava, &settings, &stats);
+    let mut wide = Terminal::new(TestBackend::new(110, 26)).unwrap();
+    let mut narrow = Terminal::new(TestBackend::new(72, 20)).unwrap();
+    wide.draw(|f| pl_view.render(f, Rect::new(0, 0, 110, 26), &ctx))
+        .unwrap();
+    narrow
+        .draw(|f| pl_view.render(f, Rect::new(0, 0, 72, 20), &ctx))
+        .unwrap();
+    let wide_str = buf_str(&wide);
+    assert!(wide_str.contains("Title"));
+    assert!(wide_str.contains("Alpha Dawn"));
+    assert!(!wide_str.contains("Midnight City"));
+
+    // Esc layered behavior: 1st clears track filter, 2nd moves to List pane, 3rd clears list filter
+    pl_view.handle_action(Action::Escape);
+    assert!(pl_view.track_filter_query.is_empty());
+    assert_eq!(pl_view.pane, PlaylistsPane::Tracks);
+    assert_eq!(pl_view.filter_query, "night");
+
+    pl_view.handle_action(Action::Escape);
+    assert_eq!(pl_view.pane, PlaylistsPane::List);
+    assert_eq!(pl_view.filter_query, "night");
+
+    pl_view.handle_action(Action::Escape);
+    assert!(pl_view.filter_query.is_empty());
+
+    // 5. PlaylistDetailView sort parity (`o` cycles Original | Title | Duration)
+    let mut detail = PlaylistDetailView::new("PL_SORT".into(), "Mix".into(), false);
+    detail.set_playlist(Playlist {
+        summary: PlaylistSummary {
+            browse_id: "PL_SORT".into(),
+            title: "Mix".into(),
+            author: Some("Curator".into()),
+            count: Some("3 songs".into()),
+            thumbs: Vec::new(),
+        },
+        tracks: vec![
+            sample_track_with("d0", "Zeta", "A", Some(240)),
+            sample_track_with("d1", "Beta", "B", Some(90)),
+            sample_track_with("d2", "Alpha", "C", None),
+        ],
+        description: None,
+        views: None,
+        duration_text: None,
+        year: None,
+        total: Some(3),
+    });
+    assert_eq!(detail.sort_mode, TrackSortMode::Original);
+    detail.handle_action(Action::CycleSort);
+    assert_eq!(detail.sort_mode, TrackSortMode::Title);
+    assert_eq!(
+        detail
+            .visible_tracks()
+            .into_iter()
+            .map(|(_, t)| t.video_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["d2", "d1", "d0"]
+    );
+    detail.handle_action(Action::CycleSort);
+    assert_eq!(detail.sort_mode, TrackSortMode::Duration);
+    assert_eq!(
+        detail
+            .visible_tracks()
+            .into_iter()
+            .map(|(_, t)| t.video_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["d1", "d0", "d2"]
+    );
+    detail.handle_action(Action::CycleSort);
+    assert_eq!(detail.sort_mode, TrackSortMode::Original);
+}
+
+#[test]
+fn detail_views_toggle_save_never_flips_optimistically() {
+    use musick_tui::views::{AlbumView, ArtistView, PlaylistDetailView};
+
+    let mut artist = ArtistView::new("UC1".into(), "Artist".into(), CoverSize::M, false);
+    assert!(matches!(
+        artist.handle_action(Action::ToggleSave),
+        ViewEffect::ToggleSave {
+            kind: SavedCollectionKind::Artist,
+            ref browse_id,
+            ..
+        } if browse_id == "UC1"
+    ));
+    assert!(!artist.saved);
+    artist.saved = true;
+    let _ = artist.handle_action(Action::ToggleSave);
+    assert!(artist.saved);
+
+    let mut album = AlbumView::new("MPREb1".into(), "Album".into(), false);
+    assert!(matches!(
+        album.handle_action(Action::ToggleSave),
+        ViewEffect::ToggleSave {
+            kind: SavedCollectionKind::Album,
+            ref browse_id,
+            ..
+        } if browse_id == "MPREb1"
+    ));
+    assert!(!album.saved);
+    album.saved = true;
+    let _ = album.handle_action(Action::ToggleSave);
+    assert!(album.saved);
+
+    let mut pl = PlaylistDetailView::new("PL1".into(), "List".into(), false);
+    assert!(matches!(
+        pl.handle_action(Action::ToggleSave),
+        ViewEffect::ToggleSave {
+            kind: SavedCollectionKind::Playlist,
+            ref browse_id,
+            ..
+        } if browse_id == "PL1"
+    ));
+    assert!(!pl.saved);
+    pl.saved = true;
+    let _ = pl.handle_action(Action::ToggleSave);
+    assert!(pl.saved);
+}
+
+#[tokio::test]
+async fn app_playlists_immediate_sync_and_authoritative_toggle_save_with_error_guard() {
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    use musick_audio::{
+        AudioBackend, AudioProperties, AudioResult, BackendEvent, HybridStreamResolver,
+        PlayerEngine, PlayerEngineDeps, RawStream, StreamBackend,
+    };
+    use musick_core::{
+        AppPaths, AudioQuality, AuthManager, CacheManager, CacheSettings, ImageService,
+        InnerTubeClient, LyricsService, MemorySecretStore, SearchService, SyncEngine, UserStore,
+        build_http_client,
+    };
+    use musick_tui::app::{App, AppServices, NavPage};
+    use musick_tui::views::{AlbumView, ArtistView, PlaylistDetailView};
+    use tokio::sync::broadcast;
+
+    struct DummyBackend {
+        tx: broadcast::Sender<BackendEvent>,
+    }
+    impl DummyBackend {
+        fn new() -> Self {
+            let (tx, _) = broadcast::channel(8);
+            Self { tx }
+        }
+    }
+    #[async_trait::async_trait]
+    impl AudioBackend for DummyBackend {
+        async fn start(&self) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn load_url(&self, _url: &str) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn append_gapless(&self, _url: &str) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn clear_gapless_tail(&self) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn stop_track(&self) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn toggle_pause(&self) -> AudioResult<bool> {
+            Ok(false)
+        }
+        async fn set_paused(&self, _paused: bool) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn seek(&self, _seconds: f64, _relative: bool) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn set_volume(&self, volume: u8) -> AudioResult<u8> {
+            Ok(volume)
+        }
+        async fn apply_settings(&self, _settings: &Settings) -> AudioResult<()> {
+            Ok(())
+        }
+        fn subscribe_events(&self) -> broadcast::Receiver<BackendEvent> {
+            self.tx.subscribe()
+        }
+        fn properties(&self) -> AudioProperties {
+            AudioProperties::default()
+        }
+    }
+
+    struct DummyStream;
+    #[async_trait::async_trait]
+    impl StreamBackend for DummyStream {
+        async fn resolve(&self, vid: &str, _q: AudioQuality) -> AudioResult<RawStream> {
+            Ok(RawStream {
+                url: format!("https://example.invalid/{vid}"),
+                codec: "opus".into(),
+                bitrate: 128,
+                sample_rate: 48_000,
+            })
+        }
+    }
+
+    let dir = tempdir().unwrap();
+    let paths = AppPaths::from_roots(
+        dir.path().join("cfg"),
+        dir.path().join("data"),
+        dir.path().join("cache"),
+        dir.path().join("rt"),
+    );
+    let http = build_http_client();
+    let store = Arc::new(UserStore::open(&paths).unwrap());
+    let cache = Arc::new(CacheManager::open(&paths, CacheSettings::default()).unwrap());
+    let auth = Arc::new(AuthManager::new_anonymous(
+        Arc::new(MemorySecretStore::new()),
+        http.clone(),
+    ));
+    let catalog = Arc::new(
+        InnerTubeClient::new(http.clone(), auth.clone(), cache.clone(), "ID")
+            .with_base_url("http://127.0.0.1:1"),
+    );
+    let search = Arc::new(SearchService::new(
+        catalog.clone(),
+        store.clone(),
+        Settings::default(),
+    ));
+    let lyrics = Arc::new(
+        LyricsService::new(
+            Some(catalog.clone()),
+            cache.clone(),
+            http.clone(),
+            Settings::default(),
+        )
+        .with_ytdlp_captions(false),
+    );
+    let images = Arc::new(ImageService::new(http, cache.clone()));
+    let sync = Arc::new(SyncEngine::new(
+        store.clone(),
+        catalog.clone(),
+        auth.clone(),
+    ));
+    let resolver = Arc::new(HybridStreamResolver::with_backends(
+        None,
+        Arc::new(DummyStream),
+        AudioQuality::Best,
+        Arc::new(|| 1000.0),
+    ));
+    let (engine_handle, engine_join) = PlayerEngine::spawn(PlayerEngineDeps {
+        backend: Arc::new(DummyBackend::new()),
+        resolver,
+        catalog: catalog.clone(),
+        lyrics,
+        store: store.clone(),
+        auth: auth.clone(),
+        settings: Settings::default(),
+    });
+
+    // Seed two playlists before launching App
+    let p_alpha = sync.create_playlist("Alpha List", "", false).unwrap();
+    sync.add_tracks_to_playlist(
+        &p_alpha.id,
+        &[
+            sample_track_with("a0", "Zulu Track", "Artist A", Some(300)),
+            sample_track_with("a1", "Echo Track", "Artist B", Some(100)),
+            sample_track_with("a2", "Bravo Track", "Artist A", Some(200)),
+        ],
+    )
+    .unwrap();
+    let p_beta = sync.create_playlist("Beta List", "", false).unwrap();
+    sync.add_tracks_to_playlist(
+        &p_beta.id,
+        &[sample_track_with(
+            "b0",
+            "Beta Anthem",
+            "Artist C",
+            Some(150),
+        )],
+    )
+    .unwrap();
+
+    let mut app = App::new(
+        AppServices {
+            paths: paths.clone(),
+            store: store.clone(),
+            cache,
+            auth,
+            catalog,
+            search,
+            images,
+            sync: sync.clone(),
+            engine: engine_handle.clone(),
+            cava: None,
+        },
+        Settings::default(),
+        CoverRenderer::halfblocks_for_test(),
+    );
+
+    // 1. Switch to Playlists tab and verify immediate right-pane track sync on navigation/filter
+    //    WITHOUT calling poll_engine_and_bg()!
+    app.dispatch_action(Action::SwitchTab(1));
+    let first_id = app.playlists.selected_playlist().unwrap().id.clone();
+    let expected_first_tracks = store.playlist_tracks(&first_id).unwrap();
+    assert_eq!(app.playlists.selected_tracks, expected_first_tracks);
+
+    // Move down to second playlist -> right pane MUST sync immediately on dispatch_action!
+    app.dispatch_action(Action::MoveDown);
+    let second_id = app.playlists.selected_playlist().unwrap().id.clone();
+    assert_ne!(second_id, first_id);
+    let expected_second_tracks = store.playlist_tracks(&second_id).unwrap();
+    assert_eq!(app.playlists.selected_tracks, expected_second_tracks);
+
+    // Filter left pane to "Alpha" -> right pane MUST sync immediately to Alpha's 3 tracks!
+    app.dispatch_action(Action::StartSearch);
+    for ch in "Alpha".chars() {
+        app.dispatch_action(Action::InputChar(ch));
+    }
+    app.dispatch_action(Action::InputSubmit);
+    assert_eq!(app.playlists.selected_playlist().unwrap().id, p_alpha.id);
+    assert_eq!(app.playlists.selected_tracks.len(), 3);
+    assert_eq!(app.playlists.selected_tracks[0].video_id, "a0");
+
+    // 2. End-to-end filtered + sorted `dd` removes TRUE original index in SQLite and keeps track filter/sort!
+    app.dispatch_action(Action::MoveRight); // Tracks pane
+    app.dispatch_action(Action::StartSearch); // track filter
+    for ch in "Artist A".chars() {
+        app.dispatch_action(Action::InputChar(ch));
+    }
+    app.dispatch_action(Action::InputSubmit);
+    app.dispatch_action(Action::CycleSort); // Title: Bravo (orig 2), Zulu (orig 0)
+    assert_eq!(app.playlists.track_sort, TrackSortMode::Title);
+
+    // Guarded `J` while filtered+sorted must NOT touch SQLite order and MUST set toast
+    app.dispatch_action(Action::MoveItemDown);
+    assert!(app.status_toast.is_some());
+    assert_eq!(
+        store
+            .playlist_tracks(&p_alpha.id)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.video_id)
+            .collect::<Vec<_>>(),
+        vec!["a0", "a1", "a2"]
+    );
+
+    // `dd` on cursor 0 ("Bravo Track", orig 2) removes "a2" from SQLite, NOT "a0"!
+    app.dispatch_action(Action::DeleteItem);
+    assert_eq!(
+        store
+            .playlist_tracks(&p_alpha.id)
+            .unwrap()
+            .into_iter()
+            .map(|t| t.video_id)
+            .collect::<Vec<_>>(),
+        vec!["a0", "a1"]
+    );
+    // Track filter & sort are preserved while reloading the same playlist!
+    assert_eq!(app.playlists.track_filter_query, "Artist A");
+    assert_eq!(app.playlists.track_sort, TrackSortMode::Title);
+    assert_eq!(app.playlists.visible_tracks().len(), 1);
+    assert_eq!(app.playlists.visible_tracks()[0].1.video_id, "a0");
+
+    // Returning to List pane and clearing left filter switches playlist if first_id != p_alpha.id,
+    // and typing a non-matching left filter immediately clears right-pane tracks!
+    app.dispatch_action(Action::MoveLeft);
+    app.dispatch_action(Action::StartSearch);
+    for ch in "zzzzzz".chars() {
+        app.dispatch_action(Action::InputChar(ch));
+    }
+    app.dispatch_action(Action::InputSubmit);
+    assert!(app.playlists.selected_playlist().is_none());
+    assert!(app.playlists.selected_tracks.is_empty());
+    assert!(app.playlists.track_filter_query.is_empty());
+
+    // 3. Authoritative `w` (ToggleSave) updates ArtistView, AlbumView, and PlaylistDetailView
+    let mut wide = Terminal::new(TestBackend::new(110, 26)).unwrap();
+
+    // ArtistView
+    app.nav_stack.push(NavPage::Artist(Box::new(ArtistView::new(
+        "UC_SAVE".into(),
+        "Saved Artist".into(),
+        CoverSize::M,
+        false,
+    ))));
+    app.dispatch_action(Action::ToggleSave);
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::Artist(v)) if v.saved));
+    wide.draw(|f| app.render(f)).unwrap();
+    assert!(buf_str(&wide).contains("Saved ✓"));
+    app.dispatch_action(Action::ToggleSave);
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::Artist(v)) if !v.saved));
+    app.nav_stack.pop();
+
+    // AlbumView
+    app.nav_stack.push(NavPage::Album(AlbumView::new(
+        "MPREb_SAVE".into(),
+        "Saved Album".into(),
+        false,
+    )));
+    app.dispatch_action(Action::ToggleSave);
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::Album(v)) if v.saved));
+    wide.draw(|f| app.render(f)).unwrap();
+    assert!(buf_str(&wide).contains("Saved ✓"));
+    app.dispatch_action(Action::ToggleSave);
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::Album(v)) if !v.saved));
+    app.nav_stack.pop();
+
+    // PlaylistDetailView
+    app.nav_stack
+        .push(NavPage::PlaylistDetail(PlaylistDetailView::new(
+            "PL_SAVE".into(),
+            "Saved Community".into(),
+            false,
+        )));
+    app.dispatch_action(Action::ToggleSave);
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::PlaylistDetail(v)) if v.saved));
+    wide.draw(|f| app.render(f)).unwrap();
+    assert!(buf_str(&wide).contains("Saved in Library ✓"));
+    app.dispatch_action(Action::ToggleSave);
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::PlaylistDetail(v)) if !v.saved));
+
+    // 4. SQLite error guard: corrupt DB in-place so toggle_save_collection fails,
+    //    and verify `saved` stays authoritatively false (never flips optimistically!)
+    let db_path = paths.user_db_file();
+    let wal_path = db_path.with_file_name("musick.db-wal");
+    let shm_path = db_path.with_file_name("musick.db-shm");
+    std::fs::write(&db_path, vec![0xFFu8; 8192]).unwrap();
+    if wal_path.exists() {
+        std::fs::write(&wal_path, vec![0xFFu8; 8192]).unwrap();
+    }
+    if shm_path.exists() {
+        std::fs::write(&shm_path, vec![0xFFu8; 8192]).unwrap();
+    }
+
+    app.status_toast = None;
+    app.dispatch_action(Action::ToggleSave);
+    assert!(
+        app.status_toast
+            .as_ref()
+            .is_some_and(|(m, _)| m.starts_with("Save failed:")),
+        "expected SQLite Save failed toast, got {:?}",
+        app.status_toast.as_ref().map(|(m, _)| m.as_str())
+    );
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::PlaylistDetail(v)) if !v.saved));
+    wide.draw(|f| app.render(f)).unwrap();
+    assert!(!buf_str(&wide).contains("Saved in Library ✓"));
+
+    // Also verify ArtistView & AlbumView do NOT flip on SQLite error
+    app.nav_stack.push(NavPage::Artist(Box::new(ArtistView::new(
+        "UC_ERR".into(),
+        "Err Artist".into(),
+        CoverSize::M,
+        false,
+    ))));
+    app.status_toast = None;
+    app.dispatch_action(Action::ToggleSave);
+    assert!(
+        app.status_toast
+            .as_ref()
+            .is_some_and(|(m, _)| m.starts_with("Save failed:"))
+    );
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::Artist(v)) if !v.saved));
+
+    app.nav_stack.push(NavPage::Album(AlbumView::new(
+        "MPREb_ERR".into(),
+        "Err Album".into(),
+        true,
+    )));
+    app.status_toast = None;
+    app.dispatch_action(Action::ToggleSave);
+    assert!(
+        app.status_toast
+            .as_ref()
+            .is_some_and(|(m, _)| m.starts_with("Save failed:"))
+    );
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::Album(v)) if v.saved));
 
     engine_handle.send(AppCommand::Shutdown).await;
     let _ = engine_join.await;

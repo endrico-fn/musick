@@ -9,7 +9,7 @@ use musick_core::{AppCommand, PlaylistSource, Track, UserPlaylist};
 use crate::keymap::Action;
 use crate::text::Align;
 use crate::theme::{ACCENT, CURSOR_BG, TEXT, panel_block};
-use crate::views::{RenderCtx, ViewEffect};
+use crate::views::{RenderCtx, TrackSortMode, ViewEffect};
 use crate::widgets::{ActiveModal, ColumnDef, ConfirmAction, TableRow, TrackTable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -27,6 +27,9 @@ pub struct PlaylistsView {
     pub track_cursor: usize,
     pub filter_active: bool,
     pub filter_query: String,
+    pub track_filter_active: bool,
+    pub track_filter_query: String,
+    pub track_sort: TrackSortMode,
 }
 
 impl Default for PlaylistsView {
@@ -45,11 +48,14 @@ impl PlaylistsView {
             track_cursor: 0,
             filter_active: false,
             filter_query: String::new(),
+            track_filter_active: false,
+            track_filter_query: String::new(),
+            track_sort: TrackSortMode::Original,
         }
     }
 
     pub fn is_insert_mode(&self) -> bool {
-        self.filter_active
+        self.filter_active || self.track_filter_active
     }
 
     pub fn filtered_playlists(&self) -> Vec<&UserPlaylist> {
@@ -71,12 +77,29 @@ impl PlaylistsView {
             .copied()
     }
 
+    /// Returns `(original_index, &Track)` pairs matching the right-pane track filter
+    /// and ordered by `self.track_sort`.
+    pub fn visible_tracks(&self) -> Vec<(usize, &Track)> {
+        self.track_sort
+            .apply(&self.selected_tracks, &self.track_filter_query)
+    }
+
+    pub fn is_track_filtered(&self) -> bool {
+        !self.track_filter_query.trim().is_empty()
+    }
+
+    pub fn on_playlist_selection_changed(&mut self) {
+        self.track_cursor = 0;
+        self.track_filter_query.clear();
+        self.track_filter_active = false;
+    }
+
     pub fn select_by_id(&mut self, playlist_id: &str) {
         self.filter_query.clear();
         self.filter_active = false;
+        self.on_playlist_selection_changed();
         if let Some(idx) = self.playlists.iter().position(|p| p.id == playlist_id) {
             self.list_cursor = idx;
-            self.track_cursor = 0;
             self.pane = PlaylistsPane::Tracks;
         }
     }
@@ -89,9 +112,8 @@ impl PlaylistsView {
 
     pub fn set_selected_tracks(&mut self, tracks: Vec<Track>) {
         self.selected_tracks = tracks;
-        self.track_cursor = self
-            .track_cursor
-            .min(self.selected_tracks.len().saturating_sub(1));
+        let vis_len = self.visible_tracks().len();
+        self.track_cursor = self.track_cursor.min(vis_len.saturating_sub(1));
     }
 
     pub fn footer_hints(&self) -> &'static [(&'static str, &'static str)] {
@@ -108,13 +130,27 @@ impl PlaylistsView {
             ],
             PlaylistsPane::Tracks => &[
                 ("Enter", "play"),
+                ("/", "filter"),
+                ("o", "sort"),
                 ("J/K", "reorder"),
                 ("dd", "remove"),
                 ("N/a", "next/queue"),
                 ("f", "like"),
                 ("h/Tab", "lists"),
-                ("S", "sync"),
             ],
+        }
+    }
+
+    fn reorder_guard_toast(&self) -> Option<String> {
+        let filtered = self.is_track_filtered();
+        let sorted = self.track_sort != TrackSortMode::Original;
+        match (filtered, sorted) {
+            (true, true) => {
+                Some("Clear track filter (Esc) and set sort to Original (o) to reorder".into())
+            }
+            (true, false) => Some("Clear track filter (Esc) before reordering tracks".into()),
+            (false, true) => Some("Set sort to Original (o) before reordering tracks".into()),
+            (false, false) => None,
         }
     }
 
@@ -124,11 +160,13 @@ impl PlaylistsView {
                 Action::InputChar(ch) => {
                     self.filter_query.push(ch);
                     self.list_cursor = 0;
+                    self.track_cursor = 0;
                     ViewEffect::None
                 }
                 Action::InputBackspace => {
                     self.filter_query.pop();
                     self.list_cursor = 0;
+                    self.track_cursor = 0;
                     ViewEffect::None
                 }
                 Action::InputSubmit | Action::InputCancel => {
@@ -139,17 +177,57 @@ impl PlaylistsView {
             };
         }
 
+        if self.track_filter_active {
+            return match action {
+                Action::InputChar(ch) => {
+                    self.track_filter_query.push(ch);
+                    self.track_cursor = 0;
+                    ViewEffect::None
+                }
+                Action::InputBackspace => {
+                    self.track_filter_query.pop();
+                    self.track_cursor = 0;
+                    ViewEffect::None
+                }
+                Action::InputSubmit | Action::InputCancel => {
+                    self.track_filter_active = false;
+                    ViewEffect::None
+                }
+                _ => ViewEffect::None,
+            };
+        }
+
         match action {
             Action::StartSearch => {
-                self.filter_active = true;
+                match self.pane {
+                    PlaylistsPane::List => {
+                        self.filter_active = true;
+                        self.track_filter_active = false;
+                    }
+                    PlaylistsPane::Tracks => {
+                        self.track_filter_active = true;
+                        self.filter_active = false;
+                    }
+                }
                 return ViewEffect::None;
             }
             Action::Escape => {
-                if !self.filter_query.is_empty() {
-                    self.filter_query.clear();
-                    self.list_cursor = 0;
-                } else if self.pane == PlaylistsPane::Tracks {
-                    self.pane = PlaylistsPane::List;
+                match self.pane {
+                    PlaylistsPane::Tracks => {
+                        if !self.track_filter_query.is_empty() {
+                            self.track_filter_query.clear();
+                            self.track_cursor = 0;
+                        } else {
+                            self.pane = PlaylistsPane::List;
+                        }
+                    }
+                    PlaylistsPane::List => {
+                        if !self.filter_query.is_empty() {
+                            self.filter_query.clear();
+                            self.list_cursor = 0;
+                            self.track_cursor = 0;
+                        }
+                    }
                 }
                 return ViewEffect::None;
             }
@@ -193,24 +271,53 @@ impl PlaylistsView {
         match action {
             Action::MoveDown => {
                 if len > 0 {
-                    self.list_cursor = (self.list_cursor + 1).min(len - 1);
-                    self.track_cursor = 0;
+                    let next = (self.list_cursor + 1).min(len - 1);
+                    if next != self.list_cursor {
+                        self.list_cursor = next;
+                        self.on_playlist_selection_changed();
+                    }
                 }
                 ViewEffect::None
             }
             Action::MoveUp => {
-                self.list_cursor = self.list_cursor.saturating_sub(1);
-                self.track_cursor = 0;
+                let next = self.list_cursor.saturating_sub(1);
+                if next != self.list_cursor {
+                    self.list_cursor = next;
+                    self.on_playlist_selection_changed();
+                }
+                ViewEffect::None
+            }
+            Action::HalfPageDown => {
+                if len > 0 {
+                    let next = (self.list_cursor + 8).min(len - 1);
+                    if next != self.list_cursor {
+                        self.list_cursor = next;
+                        self.on_playlist_selection_changed();
+                    }
+                }
+                ViewEffect::None
+            }
+            Action::HalfPageUp => {
+                let next = self.list_cursor.saturating_sub(8);
+                if next != self.list_cursor {
+                    self.list_cursor = next;
+                    self.on_playlist_selection_changed();
+                }
                 ViewEffect::None
             }
             Action::JumpTop => {
-                self.list_cursor = 0;
-                self.track_cursor = 0;
+                if self.list_cursor != 0 {
+                    self.list_cursor = 0;
+                    self.on_playlist_selection_changed();
+                }
                 ViewEffect::None
             }
             Action::JumpBottom => {
-                self.list_cursor = len.saturating_sub(1);
-                self.track_cursor = 0;
+                let next = len.saturating_sub(1);
+                if next != self.list_cursor {
+                    self.list_cursor = next;
+                    self.on_playlist_selection_changed();
+                }
                 ViewEffect::None
             }
             Action::Activate => {
@@ -276,10 +383,26 @@ impl PlaylistsView {
     }
 
     fn handle_tracks_pane(&mut self, action: Action) -> ViewEffect {
-        let len = self.selected_tracks.len();
         let pl_id = self.selected_playlist().map(|p| p.id.clone());
+        let visible = self.visible_tracks();
+        let len = visible.len();
+        let selected_entry = visible
+            .get(self.track_cursor)
+            .map(|&(orig_idx, t)| (orig_idx, t.clone()));
+        let visible_owned: Option<Vec<Track>> =
+            if matches!(action, Action::Activate | Action::PlayDirect) && len > 0 {
+                Some(visible.iter().map(|(_, t)| (*t).clone()).collect())
+            } else {
+                None
+            };
+        drop(visible);
 
         match action {
+            Action::CycleSort => {
+                self.track_sort = self.track_sort.cycle();
+                self.track_cursor = 0;
+                ViewEffect::None
+            }
             Action::MoveDown => {
                 if len > 0 {
                     self.track_cursor = (self.track_cursor + 1).min(len - 1);
@@ -309,101 +432,84 @@ impl PlaylistsView {
                 ViewEffect::None
             }
             Action::Activate | Action::PlayDirect => {
-                if len > 0 {
+                if let Some(tracks) = visible_owned {
                     ViewEffect::Command(AppCommand::PlayTracks {
-                        tracks: self.selected_tracks.clone(),
-                        start_index: self.track_cursor.min(len - 1),
+                        start_index: self.track_cursor.min(tracks.len() - 1),
+                        tracks,
                         autoplay: true,
                     })
                 } else {
                     ViewEffect::None
                 }
             }
-            Action::PlayNext => self
-                .selected_tracks
-                .get(self.track_cursor)
-                .map(|t| {
-                    ViewEffect::Command(AppCommand::PlayNext {
-                        tracks: vec![t.clone()],
-                    })
-                })
+            Action::PlayNext => selected_entry
+                .map(|(_, t)| ViewEffect::Command(AppCommand::PlayNext { tracks: vec![t] }))
                 .unwrap_or(ViewEffect::None),
-            Action::AppendQueue => self
-                .selected_tracks
-                .get(self.track_cursor)
-                .map(|t| {
-                    ViewEffect::Command(AppCommand::AppendTracks {
-                        tracks: vec![t.clone()],
-                    })
-                })
+            Action::AppendQueue => selected_entry
+                .map(|(_, t)| ViewEffect::Command(AppCommand::AppendTracks { tracks: vec![t] }))
                 .unwrap_or(ViewEffect::None),
-            Action::ToggleLike => self
-                .selected_tracks
-                .get(self.track_cursor)
-                .map(|t| ViewEffect::ToggleLike(t.clone()))
+            Action::ToggleLike => selected_entry
+                .map(|(_, t)| ViewEffect::ToggleLike(t))
                 .unwrap_or(ViewEffect::None),
-            Action::AddToPlaylist => self
-                .selected_tracks
-                .get(self.track_cursor)
-                .map(|t| ViewEffect::AddToPlaylistPicker(t.clone()))
+            Action::AddToPlaylist => selected_entry
+                .map(|(_, t)| ViewEffect::AddToPlaylistPicker(t))
                 .unwrap_or(ViewEffect::None),
-            Action::StartRadio => self
-                .selected_tracks
-                .get(self.track_cursor)
-                .map(|t| {
+            Action::StartRadio => selected_entry
+                .map(|(_, t)| {
                     ViewEffect::Command(AppCommand::StartRadio {
                         video_id: Some(t.video_id.clone()),
                         playlist_id: None,
-                        seed_track: Some(t.clone()),
+                        seed_track: Some(t),
                     })
                 })
                 .unwrap_or(ViewEffect::None),
             Action::DeleteItem => {
-                if let Some(pid) = pl_id
-                    && self.track_cursor < len
-                {
+                if let (Some(pid), Some((orig_pos, _))) = (pl_id, selected_entry) {
                     return ViewEffect::RemovePlaylistTrack {
                         playlist_id: pid,
-                        position: self.track_cursor,
+                        position: orig_pos,
                     };
                 }
                 ViewEffect::None
             }
             Action::MoveItemDown => {
-                if let Some(pid) = pl_id
-                    && self.track_cursor + 1 < len
-                {
-                    let from = self.track_cursor;
-                    let to = from + 1;
-                    self.track_cursor = to;
-                    return ViewEffect::MovePlaylistTrack {
-                        playlist_id: pid,
-                        from,
-                        to,
-                    };
+                if let Some(pid) = pl_id {
+                    if let Some(msg) = self.reorder_guard_toast() {
+                        return ViewEffect::StatusToast(msg);
+                    }
+                    if self.track_cursor + 1 < len {
+                        let from = self.track_cursor;
+                        let to = from + 1;
+                        self.track_cursor = to;
+                        return ViewEffect::MovePlaylistTrack {
+                            playlist_id: pid,
+                            from,
+                            to,
+                        };
+                    }
                 }
                 ViewEffect::None
             }
             Action::MoveItemUp => {
-                if let Some(pid) = pl_id
-                    && self.track_cursor > 0
-                    && self.track_cursor < len
-                {
-                    let from = self.track_cursor;
-                    let to = from - 1;
-                    self.track_cursor = to;
-                    return ViewEffect::MovePlaylistTrack {
-                        playlist_id: pid,
-                        from,
-                        to,
-                    };
+                if let Some(pid) = pl_id {
+                    if let Some(msg) = self.reorder_guard_toast() {
+                        return ViewEffect::StatusToast(msg);
+                    }
+                    if self.track_cursor > 0 && self.track_cursor < len {
+                        let from = self.track_cursor;
+                        let to = from - 1;
+                        self.track_cursor = to;
+                        return ViewEffect::MovePlaylistTrack {
+                            playlist_id: pid,
+                            from,
+                            to,
+                        };
+                    }
                 }
                 ViewEffect::None
             }
-            Action::CopyUrl => self
-                .selected_tracks
-                .get(self.track_cursor)
-                .map(|t| ViewEffect::CopyUrl(t.url()))
+            Action::CopyUrl => selected_entry
+                .map(|(_, t)| ViewEffect::CopyUrl(t.url()))
                 .unwrap_or(ViewEffect::None),
             _ => ViewEffect::None,
         }
@@ -500,7 +606,11 @@ impl PlaylistsView {
                 show_header: false,
                 loading: false,
                 loading_label: "",
-                empty_text: "Press c to create or I to import",
+                empty_text: if self.filter_query.trim().is_empty() {
+                    "Press c to create or I to import"
+                } else {
+                    "No playlists match filter"
+                },
                 icons: ctx.icons,
                 spinner: ctx.spinner,
             },
@@ -508,15 +618,21 @@ impl PlaylistsView {
         );
 
         // Right Pane: Selected Playlist Tracks
+        let visible = self.visible_tracks();
         let (right_title, right_sub) = match self.selected_playlist() {
             Some(pl) => {
                 let src = match pl.source {
                     PlaylistSource::YtmSynced => "YTM Synced",
                     PlaylistSource::Local => "Local · U upload",
                 };
+                let count_text = if self.is_track_filtered() {
+                    format!("{}/{} tracks", visible.len(), self.selected_tracks.len())
+                } else {
+                    format!("{} tracks", self.selected_tracks.len())
+                };
                 (
                     pl.title.as_str(),
-                    format!("{} tracks · {src}", self.selected_tracks.len()),
+                    format!("{count_text} · {} · {src}", self.track_sort.label()),
                 )
             }
             None => ("Tracks", "No playlist selected".to_string()),
@@ -530,14 +646,42 @@ impl PlaylistsView {
         let right_inner = right_block.inner(panes[2]);
         frame.render_widget(right_block, panes[2]);
 
+        let (track_filter_rect, track_table_rect) =
+            if self.track_filter_active || !self.track_filter_query.is_empty() {
+                let split = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Length(1), Constraint::Min(1)])
+                    .split(right_inner);
+                (Some(split[0]), split[1])
+            } else {
+                (None, right_inner)
+            };
+
+        if let Some(fr) = track_filter_rect {
+            let line = Line::from(vec![
+                Span::styled("/ ", Style::default().fg(ACCENT).bg(Color::Reset)),
+                Span::styled(
+                    if self.track_filter_active {
+                        format!("{}█", self.track_filter_query)
+                    } else {
+                        self.track_filter_query.clone()
+                    },
+                    Style::default().fg(TEXT).bg(if self.track_filter_active {
+                        CURSOR_BG
+                    } else {
+                        Color::Reset
+                    }),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(line), fr);
+        }
+
         let playing_vid = ctx.snapshot.track.as_ref().map(|t| t.video_id.as_str());
-        let tr_rows: Vec<TableRow> = self
-            .selected_tracks
+        let tr_rows: Vec<TableRow> = visible
             .iter()
-            .enumerate()
-            .map(|(i, t)| {
+            .map(|(orig_idx, t)| {
                 let mut r = TableRow::new(vec![
-                    format!("{:>2}. {}", i + 1, t.title),
+                    format!("{:>2}. {}", orig_idx + 1, t.title),
                     t.artist_names(),
                     t.duration_text(),
                 ]);
@@ -573,11 +717,15 @@ impl PlaylistsView {
                 show_header: true,
                 loading: false,
                 loading_label: "",
-                empty_text: "Playlist is empty — press P on any song to add tracks here",
+                empty_text: if self.is_track_filtered() {
+                    "No tracks match filter"
+                } else {
+                    "Playlist is empty — press P on any song to add tracks here"
+                },
                 icons: ctx.icons,
                 spinner: ctx.spinner,
             },
-            right_inner,
+            track_table_rect,
         );
     }
 }

@@ -141,7 +141,6 @@ impl AlbumView {
                     ),
                     None => (self.title_hint.clone(), None, None),
                 };
-                self.saved = !self.saved;
                 ViewEffect::ToggleSave {
                     kind: SavedCollectionKind::Album,
                     browse_id: self.browse_id.clone(),

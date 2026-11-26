@@ -235,7 +235,6 @@ impl ArtistView {
                     ),
                     None => (self.title_hint.clone(), None, None),
                 };
-                self.saved = !self.saved;
                 ViewEffect::ToggleSave {
                     kind: SavedCollectionKind::Artist,
                     browse_id: self.browse_id.clone(),

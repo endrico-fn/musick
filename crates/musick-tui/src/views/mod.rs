@@ -25,6 +25,67 @@ pub use playlists::{PlaylistsPane, PlaylistsView};
 pub use queue::QueueView;
 pub use settings::SettingsView;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrackSortMode {
+    #[default]
+    Original,
+    Title,
+    Duration,
+}
+
+impl TrackSortMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Original => Self::Title,
+            Self::Title => Self::Duration,
+            Self::Duration => Self::Original,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Original => "Original",
+            Self::Title => "Title",
+            Self::Duration => "Duration",
+        }
+    }
+
+    /// Filter tracks by title or artist name and sort while preserving each
+    /// track's true original index in `tracks`.
+    pub fn apply<'a>(self, tracks: &'a [Track], filter_query: &str) -> Vec<(usize, &'a Track)> {
+        let q = filter_query.trim().to_lowercase();
+        let mut items: Vec<(usize, &'a Track)> = tracks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                q.is_empty()
+                    || t.title.to_lowercase().contains(&q)
+                    || t.artist_names().to_lowercase().contains(&q)
+            })
+            .collect();
+        match self {
+            Self::Original => {}
+            Self::Title => {
+                items.sort_by(|a, b| {
+                    a.1.title
+                        .to_lowercase()
+                        .cmp(&b.1.title.to_lowercase())
+                        .then_with(|| a.0.cmp(&b.0))
+                });
+            }
+            Self::Duration => {
+                items.sort_by(|a, b| {
+                    a.1.duration
+                        .unwrap_or(u32::MAX)
+                        .cmp(&b.1.duration.unwrap_or(u32::MAX))
+                        .then_with(|| a.0.cmp(&b.0))
+                });
+            }
+        }
+        items
+    }
+}
+
 pub struct RenderCtx<'a> {
     pub snapshot: &'a PlaybackSnapshot,
     pub position: PositionTick,
