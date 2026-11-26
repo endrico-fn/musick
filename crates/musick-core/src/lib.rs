@@ -2,18 +2,31 @@ pub mod auth;
 pub mod config;
 pub mod domain;
 pub mod error;
+pub mod images;
 pub mod innertube;
+pub mod lyrics;
 pub mod paths;
 pub mod protocol;
+pub mod search;
 pub mod storage;
 
 pub use auth::{
     AuthManager, BrowserCredentials, KeyringSecretStore, MemorySecretStore, OAuthCredentials,
     OAuthDevicePrompt, OAuthPollStatus, SecretStore, compute_sapisidhash, parse_browser_headers,
 };
+pub use images::{ImageService, crop_square};
 pub use innertube::{
     CatalogApi, ClientKind, InnerTubeClient, PlaybackTelemetryEvent, PlaybackTracking,
     PlaylistEditAction, PlaylistEditResult, RadioBatch, SongRating,
+};
+pub use lyrics::{
+    LyricsService, active_line_index, looks_indonesian, parse_json3_captions, parse_lrc,
+    parse_vtt_captions, should_skip_translation,
+};
+pub use search::{
+    SearchService, Suggestion, YoutubeTarget, extract_youtube_target, is_semantic_result_set,
+    parse_query_prefix, rank_search_items, score_search_item, token_set_ratio, token_sort_ratio,
+    wratio,
 };
 pub use storage::{CacheManager, CacheStats, OutboxOp, PruneReport, UserStore};
 
