@@ -1,0 +1,32 @@
+[package]
+name = "musick-audio"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["fast-resolver"]
+fast-resolver = ["dep:rustypipe"]
+
+[dependencies]
+async-trait.workspace = true
+musick-core = { path = "../musick-core" }
+rand.workspace = true
+rustypipe = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+mpris-server.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
