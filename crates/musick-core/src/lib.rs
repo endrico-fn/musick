@@ -32,6 +32,15 @@ pub use search::{
 pub use storage::{CacheManager, CacheStats, OutboxOp, PruneReport, UserStore};
 pub use sync::{SyncEngine, SyncReport};
 
+/// Build a shared HTTP/2 rustls client with zero cookie persistence.
+pub fn build_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(8)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
 pub use config::{
     AudioQuality, AuthMode, CacheSettings, CavaAudioSource, CavaPalette, CavaSmoothing, CoverSize,
     DisplaySettings, IconMode, ImageProtocol, LyricsSettings, LyricsSource, PlayerSettings,
