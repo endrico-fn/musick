@@ -9,6 +9,7 @@ pub mod paths;
 pub mod protocol;
 pub mod search;
 pub mod storage;
+pub mod sync;
 
 pub use auth::{
     AuthManager, BrowserCredentials, KeyringSecretStore, MemorySecretStore, OAuthCredentials,
@@ -29,6 +30,7 @@ pub use search::{
     wratio,
 };
 pub use storage::{CacheManager, CacheStats, OutboxOp, PruneReport, UserStore};
+pub use sync::{SyncEngine, SyncReport};
 
 pub use config::{
     AudioQuality, AuthMode, CacheSettings, CavaAudioSource, CavaPalette, CavaSmoothing, CoverSize,
