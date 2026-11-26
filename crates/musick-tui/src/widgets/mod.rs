@@ -1,3 +1,21 @@
+pub mod cava_widget;
+pub mod cover;
+pub mod cover_grid;
+pub mod lyrics_box;
+pub mod modals;
+pub mod player_bar;
 pub mod spinner;
+pub mod tabs;
+pub mod topbar;
+pub mod track_table;
 
+pub use cava_widget::CavaWidget;
+pub use cover::CoverRenderer;
+pub use cover_grid::{GridCardItem, grid_card_dims, grid_columns_for, render_cover_grid};
+pub use lyrics_box::LyricsBox;
+pub use modals::{ActiveModal, ConfirmAction, render_modal};
+pub use player_bar::NowPlayingBar;
 pub use spinner::{BRAILLE_FRAMES, BRAILLE_STATIC, BrailleSpinner};
+pub use tabs::SectionTabs;
+pub use topbar::{ROOT_TABS, TopBar};
+pub use track_table::{ColumnDef, TableRow, TrackTable};
