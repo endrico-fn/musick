@@ -73,11 +73,7 @@ pub trait CatalogApi: Send + Sync {
     async fn rate_song(&self, video_id: &str, rating: SongRating) -> CoreResult<()>;
     async fn set_artist_subscription(&self, channel_id: &str, subscribe: bool) -> CoreResult<()>;
     async fn set_album_library_status(&self, browse_id: &str, save: bool) -> CoreResult<()>;
-    async fn set_playlist_library_status(
-        &self,
-        playlist_id: &str,
-        save: bool,
-    ) -> CoreResult<()>;
+    async fn set_playlist_library_status(&self, playlist_id: &str, save: bool) -> CoreResult<()>;
 
     // ── Strictly Opt-In Algorithm Playback Telemetry ────────────────────────
     async fn fetch_playback_tracking(
@@ -242,7 +238,13 @@ impl CatalogApi for InnerTubeClient {
         }
 
         let (home_res, new_rel_res, explore_res, charts_res) = tokio::join!(
-            self.browse("FEmusic_home", None, None, ClientKind::WebRemix, Some(region)),
+            self.browse(
+                "FEmusic_home",
+                None,
+                None,
+                ClientKind::WebRemix,
+                Some(region)
+            ),
             self.browse(
                 "FEmusic_new_releases",
                 None,
@@ -416,7 +418,12 @@ impl CatalogApi for InnerTubeClient {
         let mut map = serde_json::Map::new();
         map.insert("input".into(), json!(q));
         let raw = self
-            .post_json("music/get_search_suggestions", ClientKind::WebRemix, None, map)
+            .post_json(
+                "music/get_search_suggestions",
+                ClientKind::WebRemix,
+                None,
+                map,
+            )
             .await?;
         let sug = parsers::parse_suggestions(&raw);
         self.cache.put_catalog(&cache_key, &sug, Some(300));
@@ -494,7 +501,9 @@ impl CatalogApi for InnerTubeClient {
         {
             for t in &pl.tracks {
                 if let Some(p) = &t.plays {
-                    plays_map.entry(t.video_id.clone()).or_insert_with(|| p.clone());
+                    plays_map
+                        .entry(t.video_id.clone())
+                        .or_insert_with(|| p.clone());
                 }
             }
             let orig_map: HashMap<String, Track> = art
@@ -779,7 +788,13 @@ impl CatalogApi for InnerTubeClient {
     async fn library_playlists(&self) -> CoreResult<Vec<PlaylistSummary>> {
         self.require_auth("library_playlists")?;
         let raw = self
-            .browse("FEmusic_liked_playlists", None, None, ClientKind::WebRemix, None)
+            .browse(
+                "FEmusic_liked_playlists",
+                None,
+                None,
+                ClientKind::WebRemix,
+                None,
+            )
             .await?;
         Ok(parsers::parse_library_playlists(&raw))
     }
@@ -793,7 +808,13 @@ impl CatalogApi for InnerTubeClient {
     async fn library_albums(&self) -> CoreResult<Vec<AlbumSummary>> {
         self.require_auth("library_albums")?;
         let raw = self
-            .browse("FEmusic_liked_albums", None, None, ClientKind::WebRemix, None)
+            .browse(
+                "FEmusic_liked_albums",
+                None,
+                None,
+                ClientKind::WebRemix,
+                None,
+            )
             .await?;
         Ok(parsers::parse_library_albums(&raw))
     }
@@ -851,7 +872,12 @@ impl CatalogApi for InnerTubeClient {
         map.insert("playlistId".into(), json!(clean_pid));
         map.insert(
             "actions".into(),
-            Value::Array(actions.iter().map(PlaylistEditAction::to_innertube_json).collect()),
+            Value::Array(
+                actions
+                    .iter()
+                    .map(PlaylistEditAction::to_innertube_json)
+                    .collect(),
+            ),
         );
         let raw = self
             .post_json("browse/edit_playlist", ClientKind::WebRemix, None, map)
@@ -899,29 +925,17 @@ impl CatalogApi for InnerTubeClient {
         self.require_auth("set_album_library_status")?;
         let mut map = serde_json::Map::new();
         map.insert("target".into(), json!({ "playlistId": browse_id }));
-        let ep = if save {
-            "like/like"
-        } else {
-            "like/removelike"
-        };
+        let ep = if save { "like/like" } else { "like/removelike" };
         let _ = self.post_json(ep, ClientKind::WebRemix, None, map).await?;
         Ok(())
     }
 
-    async fn set_playlist_library_status(
-        &self,
-        playlist_id: &str,
-        save: bool,
-    ) -> CoreResult<()> {
+    async fn set_playlist_library_status(&self, playlist_id: &str, save: bool) -> CoreResult<()> {
         self.require_auth("set_playlist_library_status")?;
         let clean_pid = playlist_id.strip_prefix("VL").unwrap_or(playlist_id);
         let mut map = serde_json::Map::new();
         map.insert("target".into(), json!({ "playlistId": clean_pid }));
-        let ep = if save {
-            "like/like"
-        } else {
-            "like/removelike"
-        };
+        let ep = if save { "like/like" } else { "like/removelike" };
         let _ = self.post_json(ep, ClientKind::WebRemix, None, map).await?;
         Ok(())
     }
@@ -996,7 +1010,10 @@ impl CatalogApi for InnerTubeClient {
                         ("et", format!("{elapsed_secs:.3}")),
                         ("st", "0.000".to_string()),
                         ("len", format!("{len:.3}")),
-                        ("state", if playing { "playing" } else { "paused" }.to_string()),
+                        (
+                            "state",
+                            if playing { "playing" } else { "paused" }.to_string(),
+                        ),
                     ],
                 )
             }

@@ -166,10 +166,7 @@ impl MpvIpcBackend {
     }
 
     fn current_settings(&self) -> Settings {
-        self.settings
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.settings.read().map(|g| g.clone()).unwrap_or_default()
     }
 
     async fn is_running_inner(&self) -> bool {
@@ -367,14 +364,8 @@ impl AudioBackend for MpvIpcBackend {
                             continue;
                         }
                         if let Ok(msg) = serde_json::from_str::<Value>(trimmed) {
-                            handle_ipc_message(
-                                msg,
-                                &pending,
-                                &props,
-                                &target_vol_arc,
-                                &events_tx,
-                            )
-                            .await;
+                            handle_ipc_message(msg, &pending, &props, &target_vol_arc, &events_tx)
+                                .await;
                         }
                     }
                     Err(err) => {
@@ -640,10 +631,7 @@ impl AudioBackend for MpvIpcBackend {
     }
 
     fn properties(&self) -> AudioProperties {
-        self.props
-            .read()
-            .map(|p| *p)
-            .unwrap_or_default()
+        self.props.read().map(|p| *p).unwrap_or_default()
     }
 }
 

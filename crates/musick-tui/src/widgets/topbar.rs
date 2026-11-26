@@ -43,8 +43,18 @@ impl Widget for TopBar<'_> {
         }
         let w = usize::from(area.width);
         let compact = w < 84;
-        let tabs = if compact { ROOT_TABS_COMPACT } else { ROOT_TABS };
-        let gap_w = if w >= 100 { 3 } else if w >= 84 { 2 } else { 1 };
+        let tabs = if compact {
+            ROOT_TABS_COMPACT
+        } else {
+            ROOT_TABS
+        };
+        let gap_w = if w >= 100 {
+            3
+        } else if w >= 84 {
+            2
+        } else {
+            1
+        };
         let gap = " ".repeat(gap_w);
 
         let mut spans: Vec<Span<'_>> = Vec::new();

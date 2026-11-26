@@ -672,7 +672,13 @@ impl HomeView {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame<'_>, area: Rect, ctx: &RenderCtx<'_>, covers: &mut CoverRenderer) {
+    pub fn render(
+        &self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        ctx: &RenderCtx<'_>,
+        covers: &mut CoverRenderer,
+    ) {
         if area.width < 20 || area.height < 8 {
             return;
         }
@@ -687,7 +693,13 @@ impl HomeView {
             .split(area);
 
         // Top Row: Cover (left) + Main Discover/Search/Lyrics Panel (right) with 1-cell gap
-        let cover_w = if area.width >= 100 { 30 } else if area.width >= 80 { 24 } else { 18 };
+        let cover_w = if area.width >= 100 {
+            30
+        } else if area.width >= 80 {
+            24
+        } else {
+            18
+        };
         let top_cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -702,9 +714,7 @@ impl HomeView {
         let cover_inner = cover_block.inner(top_cols[0]);
         frame.render_widget(cover_block, top_cols[0]);
         let cover_url = ctx.snapshot.track.as_ref().and_then(Track::cover_url);
-        let cover_loading = cover_url
-            .as_deref()
-            .is_some_and(|u| !covers.has_image(u));
+        let cover_loading = cover_url.as_deref().is_some_and(|u| !covers.has_image(u));
         covers.render_cover(
             frame,
             cover_inner,
@@ -871,9 +881,7 @@ impl HomeView {
                                 let mut r = TableRow::new(vec![
                                     t.title.clone(),
                                     t.artist_names(),
-                                    t.plays
-                                        .clone()
-                                        .unwrap_or_else(|| t.duration_text()),
+                                    t.plays.clone().unwrap_or_else(|| t.duration_text()),
                                 ]);
                                 r.is_playing = playing_vid == Some(t.video_id.as_str());
                                 r.prefix_icon = Some(if t.is_video() {
@@ -1150,11 +1158,7 @@ fn item_to_table_row(
 ) -> TableRow {
     match item {
         SearchItem::Track(t) => {
-            let mut r = TableRow::new(vec![
-                t.title.clone(),
-                t.artist_names(),
-                t.duration_text(),
-            ]);
+            let mut r = TableRow::new(vec![t.title.clone(), t.artist_names(), t.duration_text()]);
             r.is_playing = playing_vid == Some(t.video_id.as_str());
             r.prefix_icon = Some(icons.icon_for_item(item));
             r
@@ -1281,6 +1285,8 @@ fn item_url(item: &SearchItem) -> String {
         SearchItem::Track(t) => t.url(),
         SearchItem::Album(a) => format!("https://music.youtube.com/browse/{}", a.browse_id),
         SearchItem::Artist(a) => format!("https://music.youtube.com/channel/{}", a.browse_id),
-        SearchItem::Playlist(p) => format!("https://music.youtube.com/playlist?list={}", p.browse_id),
+        SearchItem::Playlist(p) => {
+            format!("https://music.youtube.com/playlist?list={}", p.browse_id)
+        }
     }
 }

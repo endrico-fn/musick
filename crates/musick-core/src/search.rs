@@ -6,9 +6,7 @@ use regex::Regex;
 use unicode_normalization::UnicodeNormalization;
 
 use crate::config::Settings;
-use crate::domain::{
-    SearchCategory, SearchItem, Track, clean_media_title, search_item_key,
-};
+use crate::domain::{SearchCategory, SearchItem, Track, clean_media_title, search_item_key};
 use crate::error::CoreResult;
 use crate::innertube::CatalogApi;
 use crate::storage::UserStore;
@@ -208,10 +206,7 @@ fn clean_song_title(title: &str) -> String {
     if n.is_empty() { norm_text(title) } else { n }
 }
 
-pub fn parse_query_prefix(
-    raw: &str,
-    default_kind: SearchCategory,
-) -> (SearchCategory, String) {
+pub fn parse_query_prefix(raw: &str, default_kind: SearchCategory) -> (SearchCategory, String) {
     let stripped = raw.trim_start();
     let low = stripped.to_ascii_lowercase();
     for &(prefix, cat) in PREFIX_MAP {
@@ -292,18 +287,9 @@ fn parse_play_count(plays: Option<&str>) -> f64 {
     let Some(raw) = plays else {
         return 0.0;
     };
-    let mut s = raw
-        .trim()
-        .to_ascii_lowercase()
-        .replace([',', ' '], "");
+    let mut s = raw.trim().to_ascii_lowercase().replace([',', ' '], "");
     let mut mult = 1.0;
-    for (suffix, factor) in [
-        ("rb", 1e3),
-        ("jt", 1e6),
-        ("b", 1e9),
-        ("m", 1e6),
-        ("k", 1e3),
-    ] {
+    for (suffix, factor) in [("rb", 1e3), ("jt", 1e6), ("b", 1e9), ("m", 1e6), ("k", 1e3)] {
         if let Some(stripped) = s.strip_suffix(suffix) {
             s = stripped.to_string();
             mult = factor;
@@ -609,8 +595,8 @@ pub fn score_search_item(
                 score += 18.0;
                 matched = true;
             } else {
-                let r = token_sort_ratio(&q_norm, &clean_title)
-                    .max(token_sort_ratio(&q_norm, &combo));
+                let r =
+                    token_sort_ratio(&q_norm, &clean_title).max(token_sort_ratio(&q_norm, &combo));
                 if r >= 60.0 {
                     score += r * 0.35;
                     matched = true;
@@ -708,10 +694,7 @@ impl SearchService {
     }
 
     fn current_settings(&self) -> Settings {
-        self.settings
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.settings.read().map(|g| g.clone()).unwrap_or_default()
     }
 
     pub async fn search(
@@ -785,7 +768,10 @@ impl SearchService {
         if clean_query.is_empty() {
             return Ok(Vec::new());
         }
-        let raw_items = self.catalog.search(resolved_cat, &clean_query, limit).await?;
+        let raw_items = self
+            .catalog
+            .search(resolved_cat, &clean_query, limit)
+            .await?;
         let mut ranked = rank_search_items(raw_items, &clean_query, resolved_cat);
         ranked.truncate(limit);
         Ok(ranked)
@@ -840,11 +826,7 @@ impl SearchService {
             return hist.into_iter().take(limit).collect();
         }
 
-        let remote = self
-            .catalog
-            .suggestions(&clean_q)
-            .await
-            .unwrap_or_default();
+        let remote = self.catalog.suggestions(&clean_q).await.unwrap_or_default();
 
         let mut seen: HashSet<String> = hist.iter().map(|s| s.text.to_lowercase()).collect();
         let hint = if cat == SearchCategory::All {

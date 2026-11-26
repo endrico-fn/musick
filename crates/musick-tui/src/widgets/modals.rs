@@ -153,9 +153,7 @@ pub fn render_modal(
                     let bg = if sel { CURSOR_BG } else { Color::Reset };
                     lines.push(Line::from(Span::styled(
                         format!("{prefix}{} ({} tracks)", pl.title, pl.track_count),
-                        Style::default()
-                            .fg(if sel { ACCENT } else { TEXT })
-                            .bg(bg),
+                        Style::default().fg(if sel { ACCENT } else { TEXT }).bg(bg),
                     )));
                 }
             }
@@ -233,7 +231,12 @@ pub fn render_modal(
                     lines.push(spinner.loading_line("Waiting for browser authorization…"));
                 }
             } else {
-                lines.push(field_line("Client ID     ", client_id, *active_field == 0, false));
+                lines.push(field_line(
+                    "Client ID     ",
+                    client_id,
+                    *active_field == 0,
+                    false,
+                ));
                 lines.push(field_line(
                     "Client Secret ",
                     client_secret,
@@ -305,20 +308,36 @@ pub fn render_modal(
         ActiveModal::KeymapHelp { scroll } => {
             let rect = centered_rect(84, 22, area);
             frame.render_widget(Clear, rect);
-            let block = panel_block("Vim Keymap Reference", Some("j/k scroll · Esc/? close"), true);
+            let block = panel_block(
+                "Vim Keymap Reference",
+                Some("j/k scroll · Esc/? close"),
+                true,
+            );
             let inner = block.inner(rect);
             frame.render_widget(block, rect);
 
             let entries: &[(&str, &str)] = &[
-                ("1 - 5 / gt gT", "Switch root tabs (Home · Playlists · Library · Queue · Settings)"),
-                ("Tab / Shift+Tab", "Next / previous sub-tab (Mixes/New Releases, Library, Artist)"),
+                (
+                    "1 - 5 / gt gT",
+                    "Switch root tabs (Home · Playlists · Library · Queue · Settings)",
+                ),
+                (
+                    "Tab / Shift+Tab",
+                    "Next / previous sub-tab (Mixes/New Releases, Library, Artist)",
+                ),
                 ("Ctrl+w + h/j/k/l", "Focus split panes"),
-                ("h j k l / Arrows", "Move cursor across lists, tables, and cover grids"),
+                (
+                    "h j k l / Arrows",
+                    "Move cursor across lists, tables, and cover grids",
+                ),
                 ("gg / G", "Jump to top / bottom"),
                 ("Ctrl+d / Ctrl+u", "Half-page scroll down / up"),
                 ("L (Shift+L)", "Toggle expanded Lyrics globally"),
                 ("t", "Toggle Indonesian lyrics translation"),
-                ("S (Shift+S)", "Sync playlists & library with YouTube Music now"),
+                (
+                    "S (Shift+S)",
+                    "Sync playlists & library with YouTube Music now",
+                ),
                 ("/", "Search (Home) or inline filter (Playlists / Library)"),
                 ("Space / n / b", "Play-Pause / Next track / Previous track"),
                 ("> <  or  ] [", "Seek +5s / -5s"),
@@ -326,12 +345,24 @@ pub fn render_modal(
                 ("s / m", "Toggle Shuffle / Cycle Repeat (off -> all -> one)"),
                 ("Enter / p", "Play or Open / Play entity directly"),
                 ("N / a", "Play Next (priority) / Append to queue"),
-                ("P / f / w", "Add to Playlist / Like-Unlike / Save-Unsave Album·Artist·Playlist"),
-                ("r / o / v / c", "Start Radio / Cycle Sort / Grid-List / Cover Size (or Create Playlist)"),
+                (
+                    "P / f / w",
+                    "Add to Playlist / Like-Unlike / Save-Unsave Album·Artist·Playlist",
+                ),
+                (
+                    "r / o / v / c",
+                    "Start Radio / Cycle Sort / Grid-List / Cover Size (or Create Playlist)",
+                ),
                 ("dd / Del", "Remove track or delete playlist (with confirm)"),
-                ("J / K (Shift)", "Reorder track down / up (Queue & User Playlists)"),
+                (
+                    "J / K (Shift)",
+                    "Reorder track down / up (Queue & User Playlists)",
+                ),
                 ("u / D / C", "Undo queue / Deduplicate / Clear upcoming"),
-                ("R / I / E / U", "Playlists: Rename / Import URL / Export JSON+M3U8 / Upload to YTM"),
+                (
+                    "R / I / E / U",
+                    "Playlists: Rename / Import URL / Export JSON+M3U8 / Upload to YTM",
+                ),
                 ("yy / Backspace / q", "Copy YTM URL / Go Back / Clean Quit"),
             ];
 
@@ -368,7 +399,9 @@ fn field_line<'a>(label: &'a str, val: &str, focused: bool, mask: bool) -> Line<
         Span::styled(label, Style::default().fg(DIM).bg(Color::Reset)),
         Span::styled(
             format!(" {shown}{cursor} "),
-            Style::default().fg(if focused { ACCENT } else { TEXT }).bg(bg),
+            Style::default()
+                .fg(if focused { ACCENT } else { TEXT })
+                .bg(bg),
         ),
     ])
 }
@@ -388,7 +421,10 @@ fn render_text_prompt(
     frame.render_widget(block, rect);
 
     let lines = vec![
-        Line::from(Span::styled(prompt, Style::default().fg(DIM).bg(Color::Reset))),
+        Line::from(Span::styled(
+            prompt,
+            Style::default().fg(DIM).bg(Color::Reset),
+        )),
         Line::from(""),
         Line::from(vec![
             Span::styled("› ", Style::default().fg(ACCENT).bg(Color::Reset)),

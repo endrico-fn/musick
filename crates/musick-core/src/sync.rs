@@ -6,9 +6,7 @@ use tokio::sync::Mutex;
 use tracing::debug;
 
 use crate::auth::{AuthManager, now_unix_secs};
-use crate::domain::{
-    PlaylistSource, SavedCollection, SavedCollectionKind, Track, UserPlaylist,
-};
+use crate::domain::{PlaylistSource, SavedCollection, SavedCollectionKind, Track, UserPlaylist};
 use crate::error::{CoreError, CoreResult};
 use crate::innertube::{CatalogApi, PlaylistEditAction, SongRating};
 use crate::storage::{OutboxOp, UserStore};
@@ -154,7 +152,12 @@ impl SyncEngine {
                 title: updated.title.clone(),
                 description: new_description.map(str::to_string),
             };
-            self.enqueue(&updated.account_key, "rename_playlist", &updated.id, &payload)?;
+            self.enqueue(
+                &updated.account_key,
+                "rename_playlist",
+                &updated.id,
+                &payload,
+            )?;
         }
         Ok(updated)
     }
@@ -174,11 +177,7 @@ impl SyncEngine {
         self.store.delete_playlist(playlist_id)
     }
 
-    pub fn add_tracks_to_playlist(
-        &self,
-        playlist_id: &str,
-        tracks: &[Track],
-    ) -> CoreResult<usize> {
+    pub fn add_tracks_to_playlist(&self, playlist_id: &str, tracks: &[Track]) -> CoreResult<usize> {
         let added = self.store.add_tracks_to_playlist(playlist_id, tracks)?;
         if added > 0
             && let Some(pl) = self.store.get_playlist(playlist_id)?
@@ -193,11 +192,7 @@ impl SyncEngine {
         Ok(added)
     }
 
-    pub fn remove_track_at(
-        &self,
-        playlist_id: &str,
-        position: usize,
-    ) -> CoreResult<Option<Track>> {
+    pub fn remove_track_at(&self, playlist_id: &str, position: usize) -> CoreResult<Option<Track>> {
         let pl_opt = self.store.get_playlist(playlist_id)?;
         let removed = self.store.remove_track_at(playlist_id, position)?;
         if let (Some(pl), Some(tr)) = (pl_opt, removed.as_ref())
@@ -266,7 +261,9 @@ impl SyncEngine {
         if let Ok(remote_pl) = self.catalog.playlist(&remote_id, 500).await
             && !remote_pl.tracks.is_empty()
         {
-            let _ = self.store.replace_playlist_tracks(&pl.id, &remote_pl.tracks);
+            let _ = self
+                .store
+                .replace_playlist_tracks(&pl.id, &remote_pl.tracks);
         }
 
         self.store
@@ -551,7 +548,9 @@ impl SyncEngine {
                 self.catalog.rate_song(&video_id, rating).await
             }
             OutboxPayload::SetAlbumLibrary { browse_id, save } => {
-                self.catalog.set_album_library_status(&browse_id, save).await
+                self.catalog
+                    .set_album_library_status(&browse_id, save)
+                    .await
             }
             OutboxPayload::SetArtistSubscription {
                 channel_id,

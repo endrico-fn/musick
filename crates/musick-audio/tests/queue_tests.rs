@@ -12,7 +12,10 @@ fn tr(id: &str, dur: u32) -> Track {
 #[test]
 fn two_tier_priority_next_up_and_shuffle_preservation() {
     let mut q = PlayQueue::with_seed(42);
-    q.set_tracks(vec![tr("a", 100), tr("b", 120), tr("c", 140), tr("d", 160)], 0);
+    q.set_tracks(
+        vec![tr("a", 100), tr("b", 120), tr("c", 140), tr("d", 160)],
+        0,
+    );
     assert_eq!(q.current().unwrap().video_id, "a");
     assert_eq!(q.role_at(0), QueueRole::Playing);
     assert_eq!(q.role_at(1), QueueRole::Queued);
@@ -44,7 +47,13 @@ fn two_tier_priority_next_up_and_shuffle_preservation() {
 fn repeat_modes_undo_dedup_move_and_clear_upcoming() {
     let mut q = PlayQueue::new();
     q.set_tracks(
-        vec![tr("a", 100), tr("b", 100), tr("a", 100), tr("b", 100), tr("c", 100)],
+        vec![
+            tr("a", 100),
+            tr("b", 100),
+            tr("a", 100),
+            tr("b", 100),
+            tr("c", 100),
+        ],
         0,
     );
 
@@ -52,7 +61,10 @@ fn repeat_modes_undo_dedup_move_and_clear_upcoming() {
     let removed = q.deduplicate();
     assert_eq!(removed, 2);
     assert_eq!(
-        q.tracks().iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(),
+        q.tracks()
+            .iter()
+            .map(|t| t.video_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["a", "b", "c"]
     );
     assert!(q.can_undo());
@@ -65,7 +77,10 @@ fn repeat_modes_undo_dedup_move_and_clear_upcoming() {
     // Move "c" to index 1
     assert!(q.move_item(2, 1));
     assert_eq!(
-        q.tracks().iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(),
+        q.tracks()
+            .iter()
+            .map(|t| t.video_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["a", "c", "b"]
     );
 
@@ -86,7 +101,10 @@ fn repeat_modes_undo_dedup_move_and_clear_upcoming() {
     let _ = q.jump(1);
     assert_eq!(q.clear_upcoming(), 1);
     assert_eq!(
-        q.tracks().iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(),
+        q.tracks()
+            .iter()
+            .map(|t| t.video_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["a", "c"]
     );
     assert!(q.undo());

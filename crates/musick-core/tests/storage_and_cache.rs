@@ -54,7 +54,14 @@ fn migrations_are_idempotent_and_playlist_crud_reorders_cleanly() {
     let store = UserStore::open(&paths).unwrap();
 
     let pl = store
-        .create_playlist("local", "Late Night", "Chill beats", PlaylistSource::Local, None, None)
+        .create_playlist(
+            "local",
+            "Late Night",
+            "Chill beats",
+            PlaylistSource::Local,
+            None,
+            None,
+        )
         .unwrap();
     assert_eq!(pl.track_count, 0);
 
@@ -65,7 +72,10 @@ fn migrations_are_idempotent_and_playlist_crud_reorders_cleanly() {
 
     let tracks = store.playlist_tracks(&pl.id).unwrap();
     assert_eq!(
-        tracks.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(),
+        tracks
+            .iter()
+            .map(|t| t.video_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["vid1", "vid2", "vid3"]
     );
 
@@ -73,7 +83,10 @@ fn migrations_are_idempotent_and_playlist_crud_reorders_cleanly() {
     assert!(store.move_track(&pl.id, 2, 0).unwrap());
     let tracks = store.playlist_tracks(&pl.id).unwrap();
     assert_eq!(
-        tracks.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(),
+        tracks
+            .iter()
+            .map(|t| t.video_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["vid3", "vid1", "vid2"]
     );
 
@@ -82,7 +95,10 @@ fn migrations_are_idempotent_and_playlist_crud_reorders_cleanly() {
     assert_eq!(removed.video_id, "vid1");
     let tracks = store.playlist_tracks(&pl.id).unwrap();
     assert_eq!(
-        tracks.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(),
+        tracks
+            .iter()
+            .map(|t| t.video_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["vid3", "vid2"]
     );
 
@@ -115,7 +131,14 @@ fn account_isolation_purges_remote_rows_without_touching_local_data() {
     let acct = "ytm:abcdef0123456789";
 
     let local_pl = store
-        .create_playlist("local", "My Local List", "", PlaylistSource::Local, None, None)
+        .create_playlist(
+            "local",
+            "My Local List",
+            "",
+            PlaylistSource::Local,
+            None,
+            None,
+        )
         .unwrap();
     let synced_pl = store
         .create_playlist(
@@ -134,8 +157,12 @@ fn account_isolation_purges_remote_rows_without_touching_local_data() {
         .add_tracks_to_playlist(&synced_pl.id, &[sample_track("r1", "Remote Song")])
         .unwrap();
 
-    store.like_track("local", &sample_track("l_like", "Local Like")).unwrap();
-    store.like_track(acct, &sample_track("r_like", "Remote Like")).unwrap();
+    store
+        .like_track("local", &sample_track("l_like", "Local Like"))
+        .unwrap();
+    store
+        .like_track(acct, &sample_track("r_like", "Remote Like"))
+        .unwrap();
 
     store
         .save_collection(&SavedCollection {

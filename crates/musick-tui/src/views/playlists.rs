@@ -457,13 +457,11 @@ impl PlaylistsView {
                     } else {
                         self.filter_query.clone()
                     },
-                    Style::default()
-                        .fg(TEXT)
-                        .bg(if self.filter_active {
-                            CURSOR_BG
-                        } else {
-                            Color::Reset
-                        }),
+                    Style::default().fg(TEXT).bg(if self.filter_active {
+                        CURSOR_BG
+                    } else {
+                        Color::Reset
+                    }),
                 ),
             ]);
             frame.render_widget(Paragraph::new(line), fr);

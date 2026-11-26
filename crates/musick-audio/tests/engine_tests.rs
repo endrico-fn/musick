@@ -10,8 +10,7 @@ use tokio::sync::broadcast;
 
 use musick_audio::{
     AudioBackend, AudioProperties, AudioResult, BackendEvent, HybridStreamResolver, PlayerEngine,
-    PlayerEngineDeps, RawStream, StreamBackend, build_cava_config, parse_cava_frame,
-    resample_bars,
+    PlayerEngineDeps, RawStream, StreamBackend, build_cava_config, parse_cava_frame, resample_bars,
 };
 use musick_core::{
     Album, AlbumSummary, AppCommand, AppPaths, Artist, ArtistSummary, AudioQuality, AuthManager,
@@ -240,11 +239,7 @@ impl CatalogApi for MockEngineCatalog {
     async fn set_album_library_status(&self, _browse_id: &str, _save: bool) -> CoreResult<()> {
         Ok(())
     }
-    async fn set_playlist_library_status(
-        &self,
-        _playlist_id: &str,
-        _save: bool,
-    ) -> CoreResult<()> {
+    async fn set_playlist_library_status(&self, _playlist_id: &str, _save: bool) -> CoreResult<()> {
         Ok(())
     }
     async fn fetch_playback_tracking(
@@ -346,7 +341,10 @@ async fn engine_retries_expired_403_once_autofills_radio_continuation_and_gates_
     let q = handle.queue();
     assert_eq!(q.tracks.len(), 5);
     assert_eq!(
-        q.tracks.iter().map(|t| t.video_id.as_str()).collect::<Vec<_>>(),
+        q.tracks
+            .iter()
+            .map(|t| t.video_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["r1", "r2", "r3", "r4", "r5"] // deduplicated r2!
     );
     assert!(

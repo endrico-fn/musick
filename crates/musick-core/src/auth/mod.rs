@@ -234,10 +234,7 @@ impl AuthManager {
         Ok(creds)
     }
 
-    pub async fn start_oauth_device_flow(
-        &self,
-        client_id: &str,
-    ) -> CoreResult<OAuthDevicePrompt> {
+    pub async fn start_oauth_device_flow(&self, client_id: &str) -> CoreResult<OAuthDevicePrompt> {
         if client_id.trim().is_empty() {
             return Err(CoreError::InvalidInput(
                 "OAuth client_id cannot be empty".into(),

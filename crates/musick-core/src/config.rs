@@ -437,8 +437,7 @@ impl Settings {
     pub fn to_toml_string(&self) -> CoreResult<String> {
         let mut copy = self.clone();
         copy.normalize();
-        toml::to_string_pretty(&copy)
-            .map_err(|e| crate::error::CoreError::Config(e.to_string()))
+        toml::to_string_pretty(&copy).map_err(|e| crate::error::CoreError::Config(e.to_string()))
     }
 
     pub fn load(path: &Path) -> Self {

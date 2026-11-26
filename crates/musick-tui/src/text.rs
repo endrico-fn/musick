@@ -178,7 +178,11 @@ pub fn wrap_bilingual_lyric_lines(
 
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.text.trim();
-        let raw = if trimmed.is_empty() { "···" } else { trimmed };
+        let raw = if trimmed.is_empty() {
+            "···"
+        } else {
+            trimmed
+        };
         for part in wrap_cells(raw, wrap_w) {
             rows.push(WrappedLyricRow {
                 orig_idx: Some(idx),

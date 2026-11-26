@@ -20,8 +20,7 @@ static TS_RE: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]").ok());
 static OFFSET_RE: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"(?i)^\[offset:([+-]?\d+)\]$").ok());
-static META_RE: LazyLock<Option<Regex>> =
-    LazyLock::new(|| Regex::new(r"^\[[a-zA-Z]+:.*\]$").ok());
+static META_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"^\[[a-zA-Z]+:.*\]$").ok());
 static VTT_TS_RE: LazyLock<Option<Regex>> =
     LazyLock::new(|| Regex::new(r"(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->").ok());
 static TAG_RE: LazyLock<Option<Regex>> = LazyLock::new(|| Regex::new(r"<[^>]+>").ok());
@@ -152,7 +151,9 @@ pub fn parse_vtt_captions(raw: &str, source: &str) -> Lyrics {
     let mut cur_time: Option<f64> = None;
     let mut buf: Vec<String> = Vec::new();
 
-    let flush = |cur_time: &mut Option<f64>, buf: &mut Vec<String>, entries: &mut Vec<LyricLine>| {
+    let flush = |cur_time: &mut Option<f64>,
+                 buf: &mut Vec<String>,
+                 entries: &mut Vec<LyricLine>| {
         if let Some(t) = cur_time.take()
             && !buf.is_empty()
         {
@@ -269,17 +270,17 @@ fn parse_translate_payload(data: &Value) -> (String, String) {
     let Some(arr) = data.as_array() else {
         return (String::new(), String::new());
     };
-    let src_lang = arr
-        .get(2)
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let src_lang = arr.get(2).and_then(Value::as_str).unwrap_or("").to_string();
     let Some(chunks) = arr.first().and_then(Value::as_array) else {
         return (String::new(), src_lang);
     };
     let mut out = String::new();
     for seg in chunks {
-        if let Some(part) = seg.as_array().and_then(|s| s.first()).and_then(Value::as_str) {
+        if let Some(part) = seg
+            .as_array()
+            .and_then(|s| s.first())
+            .and_then(Value::as_str)
+        {
             out.push_str(part);
         }
     }
@@ -322,10 +323,7 @@ impl LyricsService {
     }
 
     fn current_settings(&self) -> Settings {
-        self.settings
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.settings.read().map(|g| g.clone()).unwrap_or_default()
     }
 
     fn cache_key(video_id: &str, source: LyricsSource) -> String {
@@ -370,7 +368,9 @@ impl LyricsService {
             LyricsSource::Youtube => {
                 let mut lyr = self.fetch_yt_music(track).await;
                 if lyr.is_empty() || !lyr.synced {
-                    let cap = self.fetch_yt_captions(track, &settings.display.region).await;
+                    let cap = self
+                        .fetch_yt_captions(track, &settings.display.region)
+                        .await;
                     if !cap.is_empty() && (lyr.is_empty() || cap.synced) {
                         lyr = cap;
                     }
@@ -392,7 +392,9 @@ impl LyricsService {
                     }
                 }
                 if lyr.is_empty() || !lyr.synced {
-                    let cap = self.fetch_yt_captions(track, &settings.display.region).await;
+                    let cap = self
+                        .fetch_yt_captions(track, &settings.display.region)
+                        .await;
                     if !cap.is_empty() && (lyr.is_empty() || cap.synced) {
                         lyr = cap;
                     }
@@ -630,7 +632,8 @@ impl LyricsService {
 
         if let Some(vid) = video_id {
             let source = self.current_settings().lyrics.source;
-            self.cache.put_lyrics(&Self::cache_key(vid, source), &lyrics);
+            self.cache
+                .put_lyrics(&Self::cache_key(vid, source), &lyrics);
         }
         lyrics
     }
@@ -691,7 +694,10 @@ impl LyricsService {
             } else {
                 // Per-line fallback when batch newline segmentation shifts
                 for orig in batch {
-                    let Ok((single, _)) = self.translate_chunk(std::slice::from_ref(&orig), target_lang).await else {
+                    let Ok((single, _)) = self
+                        .translate_chunk(std::slice::from_ref(&orig), target_lang)
+                        .await
+                    else {
                         return (HashMap::new(), false);
                     };
                     let joined = single.join(" ");

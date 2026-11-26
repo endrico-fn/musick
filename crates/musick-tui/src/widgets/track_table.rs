@@ -182,7 +182,10 @@ impl Widget for TrackTable<'_> {
             0
         };
 
-        for (offset, row_idx) in (scroll_start..self.rows.len()).take(visible_rows).enumerate() {
+        for (offset, row_idx) in (scroll_start..self.rows.len())
+            .take(visible_rows)
+            .enumerate()
+        {
             let row = &self.rows[row_idx];
             let is_selected = row_idx == clamped_cursor;
             let bg = if is_selected {

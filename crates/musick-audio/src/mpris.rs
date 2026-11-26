@@ -183,10 +183,7 @@ mod linux_impl {
             Ok(loop_status_for(self.engine.snapshot().repeat))
         }
 
-        async fn set_loop_status(
-            &self,
-            loop_status: LoopStatus,
-        ) -> mpris_server::zbus::Result<()> {
+        async fn set_loop_status(&self, loop_status: LoopStatus) -> mpris_server::zbus::Result<()> {
             let cur = self.engine.snapshot().repeat;
             let want = match loop_status {
                 LoopStatus::None => RepeatMode::Off,
@@ -233,7 +230,9 @@ mod linux_impl {
 
         async fn set_volume(&self, volume: Volume) -> mpris_server::zbus::Result<()> {
             let pct = (volume * 100.0).round().clamp(0.0, 130.0) as u8;
-            self.engine.send(AppCommand::SetVolume { volume: pct }).await;
+            self.engine
+                .send(AppCommand::SetVolume { volume: pct })
+                .await;
             Ok(())
         }
 
@@ -283,7 +282,13 @@ mod linux_impl {
         pub fn spawn(engine: PlayerEngineHandle) -> Self {
             let task = tokio::spawn(async move {
                 let suffix = format!("musick.instance{}", std::process::id());
-                let server = match Server::new(&suffix, MusickMpris { engine: engine.clone() }).await
+                let server = match Server::new(
+                    &suffix,
+                    MusickMpris {
+                        engine: engine.clone(),
+                    },
+                )
+                .await
                 {
                     Ok(s) => s,
                     Err(err) => {

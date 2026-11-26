@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 
@@ -36,7 +36,10 @@ impl StreamBackend for MockBackend {
             tokio::time::sleep(std::time::Duration::from_millis(self.delay_ms)).await;
         }
         if self.fail.load(Ordering::SeqCst) {
-            return Err(AudioError::Resolver(format!("{} failed (PO token)", self.name)));
+            return Err(AudioError::Resolver(format!(
+                "{} failed (PO token)",
+                self.name
+            )));
         }
         Ok(RawStream {
             url: format!(
@@ -86,7 +89,9 @@ async fn circuit_breaker_fallback_single_flight_and_quality_cache_invalidation()
     let mut handles = Vec::new();
     for _ in 0..6 {
         let r = resolver.clone();
-        handles.push(tokio::spawn(async move { r.resolve("vid1").await.unwrap() }));
+        handles.push(tokio::spawn(
+            async move { r.resolve("vid1").await.unwrap() },
+        ));
     }
     for h in handles {
         let s = h.await.unwrap();

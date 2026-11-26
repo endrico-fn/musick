@@ -187,19 +187,29 @@ impl KeymapEngine {
         // 1. Check active chord prefix first
         if let Some(chord) = self.pending.take() {
             match (chord, key.code, key.modifiers) {
-                (PendingChord::G(_), KeyCode::Char('g'), m) if !m.contains(KeyModifiers::CONTROL) => {
+                (PendingChord::G(_), KeyCode::Char('g'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
                     return Some(Action::JumpTop);
                 }
-                (PendingChord::G(_), KeyCode::Char('t'), m) if !m.contains(KeyModifiers::CONTROL) => {
+                (PendingChord::G(_), KeyCode::Char('t'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
                     return Some(Action::NextTab);
                 }
-                (PendingChord::G(_), KeyCode::Char('T'), m) if !m.contains(KeyModifiers::CONTROL) => {
+                (PendingChord::G(_), KeyCode::Char('T'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
                     return Some(Action::PrevTab);
                 }
-                (PendingChord::D(_), KeyCode::Char('d'), m) if !m.contains(KeyModifiers::CONTROL) => {
+                (PendingChord::D(_), KeyCode::Char('d'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
                     return Some(Action::DeleteItem);
                 }
-                (PendingChord::Y(_), KeyCode::Char('y'), m) if !m.contains(KeyModifiers::CONTROL) => {
+                (PendingChord::Y(_), KeyCode::Char('y'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
                     return Some(Action::CopyUrl);
                 }
                 (PendingChord::CtrlW(_), KeyCode::Char('h') | KeyCode::Left, _) => {

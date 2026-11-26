@@ -4,7 +4,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
-use musick_core::{PlaybackSnapshot, PositionTick, RepeatMode, format_duration, format_duration_allow_zero};
+use musick_core::{
+    PlaybackSnapshot, PositionTick, RepeatMode, format_duration, format_duration_allow_zero,
+};
 
 use crate::text::{cell_width, trunc_cells};
 use crate::theme::{
@@ -268,9 +270,15 @@ impl Widget for NowPlayingBar<'_> {
 
             let seek_line = Line::from(vec![
                 Span::styled(left_pad, Style::default().fg(DIM).bg(Color::Reset)),
-                Span::styled("━".repeat(knob), Style::default().fg(ACCENT).bg(Color::Reset)),
+                Span::styled(
+                    "━".repeat(knob),
+                    Style::default().fg(ACCENT).bg(Color::Reset),
+                ),
                 Span::styled("●", Style::default().fg(ACCENT).bg(Color::Reset)),
-                Span::styled("─".repeat(tail), Style::default().fg(BORDER).bg(Color::Reset)),
+                Span::styled(
+                    "─".repeat(tail),
+                    Style::default().fg(BORDER).bg(Color::Reset),
+                ),
                 Span::styled(right_pad, Style::default().fg(DIM).bg(Color::Reset)),
             ]);
             seek_line.render(

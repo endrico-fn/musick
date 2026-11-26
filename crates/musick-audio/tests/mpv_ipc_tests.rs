@@ -108,8 +108,14 @@ async fn mpv_ipc_framing_observe_property_overdrive_normalize_and_gapless() {
     let backend = MpvIpcBackend::with_socket(sock_path, settings.clone(), false);
     let mut events = backend.subscribe_events();
     backend.start().await.unwrap();
-    backend.load_url("https://example.invalid/audio1.opus").await.unwrap();
-    backend.append_gapless("https://example.invalid/audio2.opus").await.unwrap();
+    backend
+        .load_url("https://example.invalid/audio1.opus")
+        .await
+        .unwrap();
+    backend
+        .append_gapless("https://example.invalid/audio2.opus")
+        .await
+        .unwrap();
 
     // Test overdrive > 100% attaches @musicklim + clamps mpv volume to 100
     assert_eq!(backend.set_volume(120).await.unwrap(), 120);
@@ -149,19 +155,20 @@ async fn mpv_ipc_framing_observe_property_overdrive_normalize_and_gapless() {
     let _ = tokio::time::timeout(Duration::from_millis(300), server).await;
 
     let cmds = received.lock().unwrap();
-    assert!(cmds.iter().any(|c| c[0] == "observe_property" && c[2] == "time-pos"));
-    assert!(cmds.iter().any(|c| c[0] == "loadfile" && c[2] == "replace"));
-    assert!(cmds.iter().any(|c| c[0] == "loadfile" && c[2] == "append"));
     assert!(
         cmds.iter()
-            .any(|c| c[0] == "af" && c[1] == "add" && c[2].as_str().unwrap_or("").contains("@musicklim"))
+            .any(|c| c[0] == "observe_property" && c[2] == "time-pos")
     );
+    assert!(cmds.iter().any(|c| c[0] == "loadfile" && c[2] == "replace"));
+    assert!(cmds.iter().any(|c| c[0] == "loadfile" && c[2] == "append"));
+    assert!(cmds.iter().any(|c| c[0] == "af"
+        && c[1] == "add"
+        && c[2].as_str().unwrap_or("").contains("@musicklim")));
     assert!(
         cmds.iter()
             .any(|c| c[0] == "af" && c[1] == "remove" && c[2] == "@musicklim")
     );
-    assert!(
-        cmds.iter()
-            .any(|c| c[0] == "af" && c[1] == "add" && c[2].as_str().unwrap_or("").contains("@musicknorm"))
-    );
+    assert!(cmds.iter().any(|c| c[0] == "af"
+        && c[1] == "add"
+        && c[2].as_str().unwrap_or("").contains("@musicknorm")));
 }

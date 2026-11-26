@@ -317,7 +317,8 @@ impl PlayQueue {
         }
         let old_cur = self.index;
         let old_prio_end = old_cur.map(|c| c + self.priority_count());
-        let was_src_prio = matches!((old_cur, old_prio_end), (Some(c), Some(end)) if src > c && src <= end);
+        let was_src_prio =
+            matches!((old_cur, old_prio_end), (Some(c), Some(end)) if src > c && src <= end);
 
         let item = self.items.remove(src);
         self.items.insert(dst, item);
@@ -404,8 +405,7 @@ impl PlayQueue {
         if !self.shuffle {
             self.original = self.items.clone();
         } else {
-            let kept_ids: HashSet<String> =
-                self.items.iter().map(|t| t.video_id.clone()).collect();
+            let kept_ids: HashSet<String> = self.items.iter().map(|t| t.video_id.clone()).collect();
             self.original.retain(|t| kept_ids.contains(&t.video_id));
         }
         self.priority_count = 0;

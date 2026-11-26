@@ -637,13 +637,11 @@ pub fn import_playlist_m3u8(
         }
         if let Some(rest) = trimmed.strip_prefix("#EXTINF:") {
             if let Some((dur_s, label)) = rest.split_once(',') {
-                let dur = dur_s.trim().parse::<i64>().ok().and_then(|d| {
-                    if d > 0 {
-                        u32::try_from(d).ok()
-                    } else {
-                        None
-                    }
-                });
+                let dur = dur_s
+                    .trim()
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|d| if d > 0 { u32::try_from(d).ok() } else { None });
                 let (artists, song_title) = if let Some((art, t)) = label.split_once(" - ") {
                     let artists = art
                         .split(',')

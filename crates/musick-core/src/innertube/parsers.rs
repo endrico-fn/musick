@@ -436,14 +436,12 @@ fn parse_card_shelf_top(card: &Value) -> Option<SearchItem> {
             artists,
             album: None,
             album_id: None,
-            duration: card
-                .get("subtitle")
-                .and_then(|sv| {
-                    runs_vec(sv)
-                        .into_iter()
-                        .filter_map(|r| r.get("text").and_then(Value::as_str))
-                        .find_map(parse_duration_str)
-                }),
+            duration: card.get("subtitle").and_then(|sv| {
+                runs_vec(sv)
+                    .into_iter()
+                    .filter_map(|r| r.get("text").and_then(Value::as_str))
+                    .find_map(parse_duration_str)
+            }),
             thumbs,
             plays: None,
             video_type: extract_watch_video_type(first_run),
@@ -518,11 +516,7 @@ pub fn parse_home_feed(
         for shelf in carousels {
             let heading = get_path(
                 shelf,
-                &[
-                    "header",
-                    "musicCarouselShelfBasicHeaderRenderer",
-                    "title",
-                ],
+                &["header", "musicCarouselShelfBasicHeaderRenderer", "title"],
             )
             .and_then(runs_text)
             .unwrap_or_default()
@@ -584,11 +578,7 @@ pub fn parse_home_feed(
         for shelf in carousels {
             let heading = get_path(
                 shelf,
-                &[
-                    "header",
-                    "musicCarouselShelfBasicHeaderRenderer",
-                    "title",
-                ],
+                &["header", "musicCarouselShelfBasicHeaderRenderer", "title"],
             )
             .and_then(runs_text)
             .unwrap_or_default()
@@ -794,11 +784,20 @@ pub fn parse_artist(browse_id: &str, raw: &Value) -> Artist {
             .and_then(runs_text)
             .unwrap_or_default()
             .to_ascii_lowercase();
-        let more_bid = get_str(
-            shelf,
-            &["bottomEndpoint", "browseEndpoint", "browseId"],
-        )
-        .or_else(|| get_str(shelf, &["title", "runs", "0", "navigationEndpoint", "browseEndpoint", "browseId"]));
+        let more_bid =
+            get_str(shelf, &["bottomEndpoint", "browseEndpoint", "browseId"]).or_else(|| {
+                get_str(
+                    shelf,
+                    &[
+                        "title",
+                        "runs",
+                        "0",
+                        "navigationEndpoint",
+                        "browseEndpoint",
+                        "browseId",
+                    ],
+                )
+            });
         if heading.contains("song")
             && let Some(bid) = more_bid
         {
@@ -827,12 +826,20 @@ pub fn parse_artist(browse_id: &str, raw: &Value) -> Artist {
             .and_then(|h| {
                 get_path(
                     h,
-                    &["moreContentButton", "buttonRenderer", "navigationEndpoint", "browseEndpoint"],
+                    &[
+                        "moreContentButton",
+                        "buttonRenderer",
+                        "navigationEndpoint",
+                        "browseEndpoint",
+                    ],
                 )
             })
             .or_else(|| {
                 hdr.and_then(|h| {
-                    get_path(h, &["title", "runs", "0", "navigationEndpoint", "browseEndpoint"])
+                    get_path(
+                        h,
+                        &["title", "runs", "0", "navigationEndpoint", "browseEndpoint"],
+                    )
                 })
             });
         let more_bid = more_ep
@@ -851,7 +858,8 @@ pub fn parse_artist(browse_id: &str, raw: &Value) -> Artist {
             artist.singles_browse_id = more_bid;
             artist.singles_params = more_params;
         } else if heading.contains("video") {
-            artist.videos_playlist_id = more_bid.map(|b| b.strip_prefix("VL").unwrap_or(&b).to_string());
+            artist.videos_playlist_id =
+                more_bid.map(|b| b.strip_prefix("VL").unwrap_or(&b).to_string());
         }
 
         if let Some(contents) = get_array(shelf, &["contents"]) {
@@ -907,12 +915,11 @@ pub fn parse_artist_releases(raw: &Value, default_kind: &str) -> Vec<AlbumSummar
 }
 
 pub fn parse_album(browse_id: &str, raw: &Value) -> Album {
-    let header = get_path(raw, &["header", "musicDetailHeaderRenderer"])
-        .or_else(|| {
-            let mut resp_headers = Vec::new();
-            find_all_by_key(raw, "musicResponsiveHeaderRenderer", &mut resp_headers);
-            resp_headers.into_iter().next()
-        });
+    let header = get_path(raw, &["header", "musicDetailHeaderRenderer"]).or_else(|| {
+        let mut resp_headers = Vec::new();
+        find_all_by_key(raw, "musicResponsiveHeaderRenderer", &mut resp_headers);
+        resp_headers.into_iter().next()
+    });
 
     let title = header
         .and_then(|h| h.get("title"))
@@ -921,8 +928,16 @@ pub fn parse_album(browse_id: &str, raw: &Value) -> Album {
     let thumbs = header.map(extract_thumbs).unwrap_or_default();
     let description = header
         .and_then(|h| {
-            h.get("description")
-                .or_else(|| get_path(h, &["description", "musicDescriptionShelfRenderer", "description"]))
+            h.get("description").or_else(|| {
+                get_path(
+                    h,
+                    &[
+                        "description",
+                        "musicDescriptionShelfRenderer",
+                        "description",
+                    ],
+                )
+            })
         })
         .and_then(runs_text);
     let duration_text = header
@@ -1002,7 +1017,17 @@ pub fn parse_album(browse_id: &str, raw: &Value) -> Album {
 
 pub fn parse_playlist(playlist_id: &str, raw: &Value) -> (Playlist, Option<String>) {
     let header = get_path(raw, &["header", "musicDetailHeaderRenderer"])
-        .or_else(|| get_path(raw, &["header", "musicEditablePlaylistDetailHeaderRenderer", "header", "musicDetailHeaderRenderer"]))
+        .or_else(|| {
+            get_path(
+                raw,
+                &[
+                    "header",
+                    "musicEditablePlaylistDetailHeaderRenderer",
+                    "header",
+                    "musicDetailHeaderRenderer",
+                ],
+            )
+        })
         .or_else(|| {
             let mut resp_headers = Vec::new();
             find_all_by_key(raw, "musicResponsiveHeaderRenderer", &mut resp_headers);
@@ -1019,8 +1044,16 @@ pub fn parse_playlist(playlist_id: &str, raw: &Value) -> (Playlist, Option<Strin
         .and_then(runs_text);
     let description = header
         .and_then(|h| {
-            h.get("description")
-                .or_else(|| get_path(h, &["description", "musicDescriptionShelfRenderer", "description"]))
+            h.get("description").or_else(|| {
+                get_path(
+                    h,
+                    &[
+                        "description",
+                        "musicDescriptionShelfRenderer",
+                        "description",
+                    ],
+                )
+            })
         })
         .and_then(runs_text);
     let second_sub = header
@@ -1047,9 +1080,10 @@ pub fn parse_playlist(playlist_id: &str, raw: &Value) -> (Playlist, Option<Strin
     }
 
     // Continuation responses return `continuationContents.musicPlaylistShelfContinuation`
-    if let Some(cont_shelf) =
-        get_path(raw, &["continuationContents", "musicPlaylistShelfContinuation"])
-    {
+    if let Some(cont_shelf) = get_path(
+        raw,
+        &["continuationContents", "musicPlaylistShelfContinuation"],
+    ) {
         if let Some(contents) = get_array(cont_shelf, &["contents"]) {
             for c in contents {
                 if let Some(SearchItem::Track(tr)) = parse_any_item(c) {
@@ -1063,7 +1097,10 @@ pub fn parse_playlist(playlist_id: &str, raw: &Value) -> (Playlist, Option<Strin
     let total = Some(tracks.len());
     let playlist = Playlist {
         summary: PlaylistSummary {
-            browse_id: playlist_id.strip_prefix("VL").unwrap_or(playlist_id).to_string(),
+            browse_id: playlist_id
+                .strip_prefix("VL")
+                .unwrap_or(playlist_id)
+                .to_string(),
             title,
             author,
             count: second_sub.clone(),
@@ -1092,7 +1129,10 @@ fn extract_continuation_token(node: &Value) -> Option<String> {
     let mut items = Vec::new();
     find_all_by_key(node, "continuationItemRenderer", &mut items);
     for item in items {
-        if let Some(tok) = get_str(item, &["continuationEndpoint", "continuationCommand", "token"]) {
+        if let Some(tok) = get_str(
+            item,
+            &["continuationEndpoint", "continuationCommand", "token"],
+        ) {
             return Some(tok.to_string());
         }
     }
@@ -1120,12 +1160,7 @@ pub fn parse_watch_playlist(raw: &Value) -> (RadioBatch, Option<String>, Option<
             "playlistPanelRenderer",
         ],
     )
-    .or_else(|| {
-        get_path(
-            raw,
-            &["continuationContents", "playlistPanelContinuation"],
-        )
-    });
+    .or_else(|| get_path(raw, &["continuationContents", "playlistPanelContinuation"]));
 
     if let Some(p) = panel {
         playlist_id = p
@@ -1135,10 +1170,16 @@ pub fn parse_watch_playlist(raw: &Value) -> (RadioBatch, Option<String>, Option<
         continuation = extract_continuation_token(p);
         if let Some(contents) = get_array(p, &["contents"]) {
             for c in contents {
-                if let Some(r) = c
-                    .get("playlistPanelVideoRenderer")
-                    .or_else(|| get_path(c, &["playlistPanelVideoWrapperRenderer", "primaryRenderer", "playlistPanelVideoRenderer"]))
-                    && let Some(tr) = parse_playlist_panel_video(r)
+                if let Some(r) = c.get("playlistPanelVideoRenderer").or_else(|| {
+                    get_path(
+                        c,
+                        &[
+                            "playlistPanelVideoWrapperRenderer",
+                            "primaryRenderer",
+                            "playlistPanelVideoRenderer",
+                        ],
+                    )
+                }) && let Some(tr) = parse_playlist_panel_video(r)
                 {
                     tracks.push(tr);
                 }

@@ -8,7 +8,9 @@ use tokio::process::Command;
 use tokio::sync::Notify;
 use tracing::debug;
 
-use musick_core::{AppPaths, AudioQuality, ensure_private_dir};
+#[cfg(feature = "fast-resolver")]
+use musick_core::ensure_private_dir;
+use musick_core::{AppPaths, AudioQuality};
 
 use crate::error::{AudioError, AudioResult};
 
@@ -134,7 +136,9 @@ impl StreamBackend for RustyPipeBackend {
 
         let is_opus = |s: &rustypipe::model::AudioStream| {
             s.mime.to_ascii_lowercase().contains("opus")
-                || format!("{:?}", s.codec).to_ascii_lowercase().contains("opus")
+                || format!("{:?}", s.codec)
+                    .to_ascii_lowercase()
+                    .contains("opus")
         };
 
         let picked = match quality {
@@ -145,7 +149,11 @@ impl StreamBackend for RustyPipeBackend {
                 .iter()
                 .filter(|s| s.average_bitrate.max(s.bitrate) <= 150_000)
                 .max_by_key(|s| (u32::from(is_opus(s)), s.average_bitrate.max(s.bitrate)))
-                .or_else(|| streams.iter().min_by_key(|s| s.average_bitrate.max(s.bitrate))),
+                .or_else(|| {
+                    streams
+                        .iter()
+                        .min_by_key(|s| s.average_bitrate.max(s.bitrate))
+                }),
             AudioQuality::Saver => streams
                 .iter()
                 .filter(|s| {
@@ -153,7 +161,11 @@ impl StreamBackend for RustyPipeBackend {
                     (40_000..=85_000).contains(&b)
                 })
                 .min_by_key(|s| s.average_bitrate.max(s.bitrate))
-                .or_else(|| streams.iter().min_by_key(|s| s.average_bitrate.max(s.bitrate))),
+                .or_else(|| {
+                    streams
+                        .iter()
+                        .min_by_key(|s| s.average_bitrate.max(s.bitrate))
+                }),
         }
         .ok_or_else(|| AudioError::Resolver("No suitable RustyPipe audio stream".into()))?;
 
@@ -267,7 +279,9 @@ impl StreamBackend for YtDlpBackend {
             .filter(|l| !l.is_empty())
             .collect();
         if lines.is_empty() {
-            return Err(AudioError::Resolver("yt-dlp returned empty stream URL".into()));
+            return Err(AudioError::Resolver(
+                "yt-dlp returned empty stream URL".into(),
+            ));
         }
 
         let mut codec = String::new();
@@ -526,7 +540,9 @@ impl HybridStreamResolver {
                     stream
                 }
                 Err(fast_err) => {
-                    debug!("Fast resolver failed for {video_id}, falling back to yt-dlp: {fast_err}");
+                    debug!(
+                        "Fast resolver failed for {video_id}, falling back to yt-dlp: {fast_err}"
+                    );
                     if let Ok(mut cb) = self.circuit.lock() {
                         cb.consecutive_failures += 1;
                         if cb.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD {

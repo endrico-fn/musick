@@ -97,10 +97,7 @@ impl CacheManager {
     }
 
     pub fn current_settings(&self) -> CacheSettings {
-        self.settings
-            .read()
-            .map(|g| g.clone())
-            .unwrap_or_default()
+        self.settings.read().map(|g| g.clone()).unwrap_or_default()
     }
 
     // ── Catalog JSON Cache ──────────────────────────────────────────────────
@@ -393,7 +390,10 @@ impl CacheManager {
 
         let (val, expires_at) = row?;
         if expires_at <= now || val.trim().is_empty() {
-            let _ = conn.execute("DELETE FROM ephemeral_kv WHERE key = ?1", [VISITOR_DATA_KEY]);
+            let _ = conn.execute(
+                "DELETE FROM ephemeral_kv WHERE key = ?1",
+                [VISITOR_DATA_KEY],
+            );
             return None;
         }
         Some(val)
@@ -416,7 +416,10 @@ impl CacheManager {
 
     pub fn clear_visitor_data(&self) {
         if let Ok(conn) = self.conn.lock() {
-            let _ = conn.execute("DELETE FROM ephemeral_kv WHERE key = ?1", [VISITOR_DATA_KEY]);
+            let _ = conn.execute(
+                "DELETE FROM ephemeral_kv WHERE key = ?1",
+                [VISITOR_DATA_KEY],
+            );
         }
     }
 
@@ -489,8 +492,7 @@ impl CacheManager {
         let _ = conn.execute("DELETE FROM ephemeral_kv WHERE expires_at <= ?1", [now]);
 
         // 2. Catalog TTL + LRU byte cap
-        let (cat_ev, cat_freed) =
-            prune_kv_table(&conn, "catalog_cache", now, catalog_max_bytes)?;
+        let (cat_ev, cat_freed) = prune_kv_table(&conn, "catalog_cache", now, catalog_max_bytes)?;
         report.catalog_evicted = cat_ev;
         report.bytes_freed = report.bytes_freed.saturating_add(cat_freed);
 
@@ -502,9 +504,8 @@ impl CacheManager {
         // 4. Image TTL + LRU byte & file-count cap
         let cutoff = now.saturating_sub(image_ttl_secs as i64);
         let expired_hashes: Vec<(String, i64)> = {
-            let mut stmt = conn.prepare(
-                "SELECT url_hash, size_bytes FROM image_index WHERE created_at < ?1",
-            )?;
+            let mut stmt =
+                conn.prepare("SELECT url_hash, size_bytes FROM image_index WHERE created_at < ?1")?;
             let rows = stmt.query_map([cutoff], |r| Ok((r.get(0)?, r.get(1)?)))?;
             let mut v = Vec::new();
             for row in rows {
@@ -516,8 +517,9 @@ impl CacheManager {
             conn.execute("DELETE FROM image_index WHERE url_hash = ?1", [&hash])?;
             let _ = fs::remove_file(self.images_dir.join(format!("{hash}.bin")));
             report.images_evicted += 1;
-            report.bytes_freed =
-                report.bytes_freed.saturating_add(u64::try_from(sz.max(0)).unwrap_or(0));
+            report.bytes_freed = report
+                .bytes_freed
+                .saturating_add(u64::try_from(sz.max(0)).unwrap_or(0));
         }
 
         let ordered_imgs: Vec<(String, u64)> = {
@@ -631,8 +633,7 @@ fn prune_kv_table(
     let mut evicted = 0usize;
     let mut freed = 0u64;
 
-    let expired_sql =
-        format!("SELECT cache_key, size_bytes FROM {table} WHERE expires_at <= ?1");
+    let expired_sql = format!("SELECT cache_key, size_bytes FROM {table} WHERE expires_at <= ?1");
     let expired: Vec<(String, u64)> = {
         let mut stmt = conn.prepare(&expired_sql)?;
         let rows = stmt.query_map([now], |r| {

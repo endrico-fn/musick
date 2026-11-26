@@ -29,7 +29,9 @@ impl CoverRenderer {
     pub fn detect(pref: ImageProtocol) -> Self {
         let mut picker = match pref {
             ImageProtocol::Halfblock => Picker::halfblocks(),
-            ImageProtocol::Auto => Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()),
+            ImageProtocol::Auto => {
+                Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
+            }
             ImageProtocol::Kitty => {
                 let mut p = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
                 p.set_protocol_type(ProtocolType::Kitty);

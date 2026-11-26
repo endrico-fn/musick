@@ -21,7 +21,8 @@ fn unicode_cjk_and_emoji_truncation_and_alignment_fit_exact_display_columns() {
     assert_eq!(cell_width(&right_aligned), 8);
     assert!(right_aligned.ends_with("3:45"));
 
-    let (left, right, gap) = split_row_cells("夜に駆ける - Long Title Name", "337M · 4:21", 30, 2, 0.4);
+    let (left, right, gap) =
+        split_row_cells("夜に駆ける - Long Title Name", "337M · 4:21", 30, 2, 0.4);
     assert!(cell_width(&left) + gap + cell_width(&right) <= 28);
 
     let wrapped = wrap_cells("こんにちは世界音楽プレイヤーテスト", 10);
@@ -158,7 +159,10 @@ mod widget_render_tests {
         // Verify gold overdrive styling exists on row 2
         let buf = term.backend().buffer();
         let has_gold = (0..100).any(|x| buf[(x, 2)].fg == WARN_GOLD);
-        assert!(has_gold, "Expected gold WARN_GOLD foreground at 120% volume");
+        assert!(
+            has_gold,
+            "Expected gold WARN_GOLD foreground at 120% volume"
+        );
     }
 
     #[test]

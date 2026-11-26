@@ -1,7 +1,11 @@
+pub mod album;
+pub mod artist;
 pub mod home;
 pub mod library;
+pub mod playlist_detail;
 pub mod playlists;
 pub mod queue;
+pub mod settings;
 
 use musick_audio::CavaFrame;
 use musick_core::{
@@ -12,10 +16,14 @@ use musick_core::{
 use crate::theme::IconSet;
 use crate::widgets::{ActiveModal, BrailleSpinner};
 
+pub use album::AlbumView;
+pub use artist::{ArtistTab, ArtistView};
 pub use home::{HomeDiscoverTab, HomeFocusPane, HomePanelMode, HomeView};
 pub use library::{LibraryTab, LibraryView};
+pub use playlist_detail::PlaylistDetailView;
 pub use playlists::{PlaylistsPane, PlaylistsView};
 pub use queue::QueueView;
+pub use settings::SettingsView;
 
 pub struct RenderCtx<'a> {
     pub snapshot: &'a PlaybackSnapshot,

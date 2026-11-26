@@ -254,11 +254,7 @@ impl CatalogApi for MockCatalog {
         Ok(())
     }
 
-    async fn set_playlist_library_status(
-        &self,
-        playlist_id: &str,
-        save: bool,
-    ) -> CoreResult<()> {
+    async fn set_playlist_library_status(&self, playlist_id: &str, save: bool) -> CoreResult<()> {
         let mut st = self.state.lock().unwrap();
         if st.offline {
             return Err(CoreError::Catalog("offline".into()));
@@ -369,7 +365,8 @@ async fn fifo_push_captures_set_video_id_and_refreshes_missing_set_video_id_befo
 }
 
 #[tokio::test]
-async fn pull_preserves_local_playlists_downgrades_deleted_remote_with_pending_edits_and_syncs_community_save() {
+async fn pull_preserves_local_playlists_downgrades_deleted_remote_with_pending_edits_and_syncs_community_save()
+ {
     let (_dir, store, catalog, auth, sync) = setup();
 
     // Create a strictly local playlist BEFORE logging in

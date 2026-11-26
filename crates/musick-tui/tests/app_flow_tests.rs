@@ -291,3 +291,327 @@ fn playlists_library_and_queue_views_render_and_emit_expected_effects() {
         .unwrap();
     assert!(buf_str(&term).contains("Saved Album One"));
 }
+
+#[tokio::test]
+async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20_render() {
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    use musick_audio::{
+        AudioBackend, AudioProperties, AudioResult, BackendEvent, HybridStreamResolver,
+        PlayerEngine, PlayerEngineDeps, RawStream, StreamBackend,
+    };
+    use musick_core::{
+        Album, AppPaths, Artist, ArtistSummary, AudioQuality, AuthManager, CacheManager,
+        CacheSettings, ImageService, InnerTubeClient, LyricsService, MemorySecretStore, Playlist,
+        PlaylistSummary, SearchService, SyncEngine, UserStore, build_http_client,
+    };
+    use musick_tui::app::{App, AppServices, NavPage};
+    use musick_tui::views::{AlbumView, ArtistTab, ArtistView, PlaylistDetailView};
+    use tokio::sync::broadcast;
+
+    struct DummyBackend {
+        tx: broadcast::Sender<BackendEvent>,
+    }
+    impl DummyBackend {
+        fn new() -> Self {
+            let (tx, _) = broadcast::channel(8);
+            Self { tx }
+        }
+    }
+    #[async_trait::async_trait]
+    impl AudioBackend for DummyBackend {
+        async fn start(&self) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn load_url(&self, _url: &str) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn append_gapless(&self, _url: &str) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn clear_gapless_tail(&self) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn stop_track(&self) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn toggle_pause(&self) -> AudioResult<bool> {
+            Ok(false)
+        }
+        async fn set_paused(&self, _paused: bool) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn seek(&self, _seconds: f64, _relative: bool) -> AudioResult<()> {
+            Ok(())
+        }
+        async fn set_volume(&self, volume: u8) -> AudioResult<u8> {
+            Ok(volume)
+        }
+        async fn apply_settings(&self, _settings: &Settings) -> AudioResult<()> {
+            Ok(())
+        }
+        fn subscribe_events(&self) -> broadcast::Receiver<BackendEvent> {
+            self.tx.subscribe()
+        }
+        fn properties(&self) -> AudioProperties {
+            AudioProperties::default()
+        }
+    }
+
+    struct DummyStream;
+    #[async_trait::async_trait]
+    impl StreamBackend for DummyStream {
+        async fn resolve(&self, vid: &str, _q: AudioQuality) -> AudioResult<RawStream> {
+            Ok(RawStream {
+                url: format!("https://example.invalid/{vid}"),
+                codec: "opus".into(),
+                bitrate: 128,
+                sample_rate: 48_000,
+            })
+        }
+    }
+
+    let dir = tempdir().unwrap();
+    let paths = AppPaths::from_roots(
+        dir.path().join("cfg"),
+        dir.path().join("data"),
+        dir.path().join("cache"),
+        dir.path().join("rt"),
+    );
+    let http = build_http_client();
+    let store = Arc::new(UserStore::open(&paths).unwrap());
+    let cache = Arc::new(CacheManager::open(&paths, CacheSettings::default()).unwrap());
+    let auth = Arc::new(AuthManager::new_anonymous(
+        Arc::new(MemorySecretStore::new()),
+        http.clone(),
+    ));
+    let catalog = Arc::new(
+        InnerTubeClient::new(http.clone(), auth.clone(), cache.clone(), "ID")
+            .with_base_url("http://127.0.0.1:1"),
+    );
+    let search = Arc::new(SearchService::new(
+        catalog.clone(),
+        store.clone(),
+        Settings::default(),
+    ));
+    let lyrics = Arc::new(
+        LyricsService::new(
+            Some(catalog.clone()),
+            cache.clone(),
+            http.clone(),
+            Settings::default(),
+        )
+        .with_ytdlp_captions(false),
+    );
+    let images = Arc::new(ImageService::new(http, cache.clone()));
+    let sync = Arc::new(SyncEngine::new(
+        store.clone(),
+        catalog.clone(),
+        auth.clone(),
+    ));
+    let resolver = Arc::new(HybridStreamResolver::with_backends(
+        None,
+        Arc::new(DummyStream),
+        AudioQuality::Best,
+        Arc::new(|| 1000.0),
+    ));
+    let (engine_handle, engine_join) = PlayerEngine::spawn(PlayerEngineDeps {
+        backend: Arc::new(DummyBackend::new()),
+        resolver,
+        catalog: catalog.clone(),
+        lyrics,
+        store: store.clone(),
+        auth: auth.clone(),
+        settings: Settings::default(),
+    });
+
+    let mut app = App::new(
+        AppServices {
+            paths,
+            store,
+            cache,
+            auth,
+            catalog,
+            search,
+            images,
+            sync,
+            engine: engine_handle.clone(),
+            cava: None,
+        },
+        Settings::default(),
+        CoverRenderer::halfblocks_for_test(),
+    );
+
+    // 1. 5-tab navigation (1-5 and gt/gT)
+    for tab_i in 0..5 {
+        app.dispatch_action(Action::SwitchTab(tab_i));
+        assert_eq!(app.active_tab, tab_i);
+    }
+    app.dispatch_action(Action::NextTab);
+    assert_eq!(app.active_tab, 0);
+    app.dispatch_action(Action::PrevTab);
+    assert_eq!(app.active_tab, 4);
+
+    // 2. SettingsView: report_playback_history is strictly locked OFF while Anonymous!
+    app.settings_view.cursor = 5; // ReportPlaybackHistory row
+    app.dispatch_action(Action::Activate);
+    assert!(!app.settings.privacy.report_playback_history);
+    assert!(
+        app.status_toast
+            .as_ref()
+            .is_some_and(|(m, _)| m.contains("Anonymous"))
+    );
+
+    // 3. Render EVERY root tab at narrow 72x20 AND wide 120x32 without panic (Review Focus #4)
+    let mut narrow = Terminal::new(TestBackend::new(72, 20)).unwrap();
+    let mut wide = Terminal::new(TestBackend::new(120, 32)).unwrap();
+
+    for tab_i in 0..5 {
+        app.dispatch_action(Action::SwitchTab(tab_i));
+        narrow.draw(|f| app.render(f)).unwrap();
+        wide.draw(|f| app.render(f)).unwrap();
+    }
+
+    // Expanded Lyrics + Help modal at narrow 72x20
+    app.dispatch_action(Action::ToggleLyrics);
+    narrow.draw(|f| app.render(f)).unwrap();
+    app.dispatch_action(Action::ToggleHelp);
+    narrow.draw(|f| app.render(f)).unwrap();
+    app.dispatch_action(Action::InputCancel);
+
+    // 4. Push ArtistView (7 sub-tabs + split overview >= 106 + cover size cycle), AlbumView, PlaylistDetailView
+    let mut art_view = ArtistView::new("UCdp1".into(), "Daft Punk".into(), CoverSize::M, false);
+    art_view.set_artist(Artist {
+        summary: ArtistSummary {
+            browse_id: "UCdp1".into(),
+            name: "Daft Punk".into(),
+            subtitle: Some("32M monthly".into()),
+            thumbs: Vec::new(),
+        },
+        description: Some("French duo".into()),
+        listeners: Some("32M monthly".into()),
+        songs: vec![sample_track("s1", "One More Time")],
+        albums: vec![AlbumSummary {
+            browse_id: "MPREb_disc".into(),
+            title: "Discovery".into(),
+            year: Some("2001".into()),
+            kind: "Album".into(),
+            artists: Vec::new(),
+            thumbs: Vec::new(),
+        }],
+        singles: Vec::new(),
+        playlists: Vec::new(),
+        related: vec![ArtistSummary {
+            browse_id: "UCjust".into(),
+            name: "Justice".into(),
+            subtitle: None,
+            thumbs: Vec::new(),
+        }],
+        albums_params: None,
+        singles_params: None,
+        radio_id: None,
+        songs_playlist_id: None,
+        videos: Vec::new(),
+        subscribers: None,
+        views: None,
+        albums_browse_id: None,
+        singles_browse_id: None,
+        videos_playlist_id: None,
+        shuffle_id: None,
+    });
+    app.nav_stack.push(NavPage::Artist(Box::new(art_view)));
+
+    // Wide render (>=106) shows split overview ("Latest & Top Releases")
+    wide.draw(|f| app.render(f)).unwrap();
+    assert!(buf_str(&wide).contains("Latest & Top Releases"));
+
+    // Cycle all 7 Artist sub-tabs and cover size at narrow 72x20
+    for _ in 0..ArtistTab::ALL.len() {
+        narrow.draw(|f| app.render(f)).unwrap();
+        app.dispatch_action(Action::CycleCoverSize);
+        app.dispatch_action(Action::NextSubTab);
+    }
+
+    // Push AlbumView & PlaylistDetailView and render at 72x20
+    let mut alb_view = AlbumView::new("MPREb_disc".into(), "Discovery".into(), false);
+    alb_view.set_album(Album {
+        summary: AlbumSummary {
+            browse_id: "MPREb_disc".into(),
+            title: "Discovery".into(),
+            year: Some("2001".into()),
+            kind: "Album".into(),
+            artists: Vec::new(),
+            thumbs: Vec::new(),
+        },
+        tracks: vec![sample_track("s1", "One More Time")],
+        description: None,
+        duration_text: Some("60 min".into()),
+    });
+    app.nav_stack.push(NavPage::Album(alb_view));
+    narrow.draw(|f| app.render(f)).unwrap();
+
+    let mut pl_det = PlaylistDetailView::new("RDCLAK1".into(), "Synthwave".into(), false);
+    pl_det.set_playlist(Playlist {
+        summary: PlaylistSummary {
+            browse_id: "RDCLAK1".into(),
+            title: "Synthwave".into(),
+            author: Some("Community".into()),
+            count: Some("1 song".into()),
+            thumbs: Vec::new(),
+        },
+        tracks: vec![sample_track("s2", "Nightcall")],
+        description: None,
+        views: None,
+        duration_text: None,
+        year: None,
+        total: Some(1),
+    });
+    app.nav_stack.push(NavPage::PlaylistDetail(pl_det));
+    narrow.draw(|f| app.render(f)).unwrap();
+
+    // Backspace pops detail views cleanly back to root tab
+    app.dispatch_action(Action::GoBack);
+    assert_eq!(app.nav_stack.len(), 2);
+    app.dispatch_action(Action::GoBack);
+    app.dispatch_action(Action::GoBack);
+    assert!(app.nav_stack.is_empty());
+
+    // Bracketed paste: ignored in Normal mode, strips newlines in single-line modals, preserves newlines in BrowserAuthImport
+    app.handle_paste("q\n");
+    assert!(!app.should_quit);
+    app.modal = Some(musick_tui::widgets::ActiveModal::CreatePlaylist {
+        input: String::new(),
+    });
+    app.handle_paste("Chill\r\nMix");
+    if let Some(musick_tui::widgets::ActiveModal::CreatePlaylist { ref input }) = app.modal {
+        assert_eq!(input, "ChillMix");
+    } else {
+        panic!("expected CreatePlaylist modal");
+    }
+    app.modal = Some(musick_tui::widgets::ActiveModal::BrowserAuthImport {
+        raw_headers: String::new(),
+        page_id: String::new(),
+        active_field: 0,
+        error: None,
+    });
+    app.handle_paste("Cookie: SAPISID=abc\r\nOrigin: https://music.youtube.com");
+    if let Some(musick_tui::widgets::ActiveModal::BrowserAuthImport {
+        ref raw_headers, ..
+    }) = app.modal
+    {
+        assert_eq!(
+            raw_headers,
+            "Cookie: SAPISID=abc\nOrigin: https://music.youtube.com"
+        );
+    } else {
+        panic!("expected BrowserAuthImport modal");
+    }
+    app.modal = None;
+
+    engine_handle.send(AppCommand::Shutdown).await;
+    let _ = engine_join.await;
+}

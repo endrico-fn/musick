@@ -253,9 +253,8 @@ pub fn record_play(conn: &Connection, track: &Track) -> CoreResult<()> {
 }
 
 pub fn recent_plays(conn: &Connection, limit: usize) -> CoreResult<Vec<Track>> {
-    let mut stmt = conn.prepare(
-        "SELECT track_json FROM play_history ORDER BY last_played_at DESC LIMIT ?1",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT track_json FROM play_history ORDER BY last_played_at DESC LIMIT ?1")?;
     let rows = stmt.query_map([limit as i64], |row| row.get::<_, String>(0))?;
     let mut out = Vec::new();
     for item in rows {
@@ -293,9 +292,8 @@ pub fn record_search_query(conn: &Connection, query: &str) -> CoreResult<()> {
 }
 
 pub fn search_history(conn: &Connection, limit: usize) -> CoreResult<Vec<String>> {
-    let mut stmt = conn.prepare(
-        "SELECT query FROM search_history ORDER BY last_used_at DESC LIMIT ?1",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT query FROM search_history ORDER BY last_used_at DESC LIMIT ?1")?;
     let rows = stmt.query_map([limit as i64], |row| row.get::<_, String>(0))?;
     let mut out = Vec::new();
     for item in rows {

@@ -405,9 +405,7 @@ async fn run_cava_task(
             });
             match ctrl_rx.recv().await {
                 Some(CavaMsg::Control(next)) => {
-                    if next.audio_source != ctrl.audio_source
-                        || (next.playing && !ctrl.playing)
-                    {
+                    if next.audio_source != ctrl.audio_source || (next.playing && !ctrl.playing) {
                         method_idx = 0;
                     }
                     ctrl = next;

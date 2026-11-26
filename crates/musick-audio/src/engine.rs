@@ -9,8 +9,8 @@ use tracing::debug;
 
 use musick_core::{
     AppCommand, AuthManager, CatalogApi, Lyrics, LyricsService, PlaybackSnapshot,
-    PlaybackTelemetryEvent, PlaybackTracking, PlayerEvent, PositionTick, QueueSnapshot,
-    RepeatMode, Settings, Track, UserStore,
+    PlaybackTelemetryEvent, PlaybackTracking, PlayerEvent, PositionTick, QueueSnapshot, RepeatMode,
+    Settings, Track, UserStore,
 };
 
 use crate::backend::{AudioBackend, BackendEvent};

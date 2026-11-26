@@ -19,11 +19,7 @@ impl Widget for SectionTabs<'_> {
             return;
         }
         let w = usize::from(area.width);
-        let full_total: usize = self
-            .tabs
-            .iter()
-            .map(|(f, _)| cell_width(f))
-            .sum::<usize>()
+        let full_total: usize = self.tabs.iter().map(|(f, _)| cell_width(f)).sum::<usize>()
             + self.tabs.len().saturating_sub(1) * 3;
         let use_short = full_total + 4 > w;
 

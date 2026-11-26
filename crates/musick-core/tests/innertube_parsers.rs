@@ -126,7 +126,10 @@ fn parses_search_artist_album_playlist_watch_and_timed_lyrics() {
         ]
     });
     let edit = parse_playlist_edit_results(&edit_resp);
-    assert_eq!(edit.added_set_video_ids, vec![("v1".into(), "SET99".into())]);
+    assert_eq!(
+        edit.added_set_video_ids,
+        vec![("v1".into(), "SET99".into())]
+    );
 }
 
 #[tokio::test]
@@ -150,10 +153,7 @@ async fn context_injects_visitor_data_and_brand_account_and_gates_telemetry_stri
         .with_base_url("http://127.0.0.1:1");
 
     // 1. Strict telemetry no-op in Anonymous mode even if report_enabled=true
-    let tracking = client
-        .fetch_playback_tracking("vid_x", true)
-        .await
-        .unwrap();
+    let tracking = client.fetch_playback_tracking("vid_x", true).await.unwrap();
     assert!(tracking.is_none());
 
     let fake_track = PlaybackTracking {

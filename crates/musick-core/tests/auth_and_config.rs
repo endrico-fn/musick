@@ -96,7 +96,10 @@ fn settings_roundtrip_and_atomic_write_permissions() {
 
     let secret_file = paths.secrets_fallback_file();
     atomic_write_text(&secret_file, "{\"secret\":true}").unwrap();
-    assert_eq!(fs::read_to_string(&secret_file).unwrap(), "{\"secret\":true}");
+    assert_eq!(
+        fs::read_to_string(&secret_file).unwrap(),
+        "{\"secret\":true}"
+    );
 
     #[cfg(unix)]
     {
@@ -139,7 +142,10 @@ fn clean_media_title_and_duration_formatting() {
         clean_media_title("Starboy (feat. Daft Punk) [Official Video]", false),
         "Starboy (feat. Daft Punk)"
     );
-    assert_eq!(clean_media_title("(Official Audio)", true), "(Official Audio)");
+    assert_eq!(
+        clean_media_title("(Official Audio)", true),
+        "(Official Audio)"
+    );
     assert_eq!(format_duration(None), "--:--");
     assert_eq!(format_duration(Some(0)), "--:--");
     assert_eq!(format_duration(Some(65)), "1:05");
@@ -314,7 +320,11 @@ origin: https://music.youtube.com
                 .starts_with("SAPISIDHASH 10000_")
         );
         assert_eq!(
-            req.headers().get("x-goog-pageid").unwrap().to_str().unwrap(),
+            req.headers()
+                .get("x-goog-pageid")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "987654321"
         );
         assert!(req.headers().get("cookie").is_some());
@@ -358,11 +368,21 @@ origin: https://music.youtube.com
         for h in handles {
             let built = h.await.unwrap();
             assert_eq!(
-                built.headers().get("authorization").unwrap().to_str().unwrap(),
+                built
+                    .headers()
+                    .get("authorization")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
                 "Bearer refreshed-token-1"
             );
             assert_eq!(
-                built.headers().get("x-goog-pageid").unwrap().to_str().unwrap(),
+                built
+                    .headers()
+                    .get("x-goog-pageid")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
                 "111222333"
             );
             assert!(built.headers().get("cookie").is_none());

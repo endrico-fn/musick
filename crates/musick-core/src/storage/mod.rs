@@ -130,11 +130,7 @@ impl UserStore {
         playlists::playlist_tracks(&conn, playlist_id)
     }
 
-    pub fn add_tracks_to_playlist(
-        &self,
-        playlist_id: &str,
-        tracks: &[Track],
-    ) -> CoreResult<usize> {
+    pub fn add_tracks_to_playlist(&self, playlist_id: &str, tracks: &[Track]) -> CoreResult<usize> {
         let mut conn = self.lock_conn()?;
         playlists::add_tracks_to_playlist(&mut conn, playlist_id, tracks)
     }
@@ -144,11 +140,7 @@ impl UserStore {
         playlists::replace_playlist_tracks(&mut conn, playlist_id, tracks)
     }
 
-    pub fn remove_track_at(
-        &self,
-        playlist_id: &str,
-        position: usize,
-    ) -> CoreResult<Option<Track>> {
+    pub fn remove_track_at(&self, playlist_id: &str, position: usize) -> CoreResult<Option<Track>> {
         let mut conn = self.lock_conn()?;
         playlists::remove_track_at(&mut conn, playlist_id, position)
     }
@@ -257,7 +249,11 @@ impl UserStore {
         library::list_liked_songs(&conn, account_key)
     }
 
-    pub fn replace_remote_liked_songs(&self, account_key: &str, tracks: &[Track]) -> CoreResult<()> {
+    pub fn replace_remote_liked_songs(
+        &self,
+        account_key: &str,
+        tracks: &[Track],
+    ) -> CoreResult<()> {
         let mut conn = self.lock_conn()?;
         library::replace_remote_liked_songs(&mut conn, account_key, tracks)
     }

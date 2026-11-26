@@ -124,26 +124,36 @@ impl LibraryView {
         let q = self.filter_query.trim().to_lowercase();
         let matches = |s: &str| q.is_empty() || s.to_lowercase().contains(&q);
         match self.active_tab {
-            LibraryTab::UserPlaylists => {
-                self.user_playlists.iter().filter(|p| matches(&p.title)).count()
-            }
-            LibraryTab::LikedSongs => {
-                self.liked_songs.iter().filter(|t| matches(&t.title)).count()
-            }
-            LibraryTab::SavedAlbums => {
-                self.saved_albums.iter().filter(|c| matches(&c.title)).count()
-            }
-            LibraryTab::SavedArtists => {
-                self.saved_artists.iter().filter(|c| matches(&c.title)).count()
-            }
+            LibraryTab::UserPlaylists => self
+                .user_playlists
+                .iter()
+                .filter(|p| matches(&p.title))
+                .count(),
+            LibraryTab::LikedSongs => self
+                .liked_songs
+                .iter()
+                .filter(|t| matches(&t.title))
+                .count(),
+            LibraryTab::SavedAlbums => self
+                .saved_albums
+                .iter()
+                .filter(|c| matches(&c.title))
+                .count(),
+            LibraryTab::SavedArtists => self
+                .saved_artists
+                .iter()
+                .filter(|c| matches(&c.title))
+                .count(),
             LibraryTab::SavedPlaylists => self
                 .saved_playlists
                 .iter()
                 .filter(|c| matches(&c.title))
                 .count(),
-            LibraryTab::Recent => {
-                self.recent_tracks.iter().filter(|t| matches(&t.title)).count()
-            }
+            LibraryTab::Recent => self
+                .recent_tracks
+                .iter()
+                .filter(|t| matches(&t.title))
+                .count(),
         }
     }
 
@@ -258,19 +268,11 @@ impl LibraryView {
             Action::PlayDirect => self.play_selected_direct(),
             Action::PlayNext => self
                 .selected_track()
-                .map(|t| {
-                    ViewEffect::Command(AppCommand::PlayNext {
-                        tracks: vec![t],
-                    })
-                })
+                .map(|t| ViewEffect::Command(AppCommand::PlayNext { tracks: vec![t] }))
                 .unwrap_or(ViewEffect::None),
             Action::AppendQueue => self
                 .selected_track()
-                .map(|t| {
-                    ViewEffect::Command(AppCommand::AppendTracks {
-                        tracks: vec![t],
-                    })
-                })
+                .map(|t| ViewEffect::Command(AppCommand::AppendTracks { tracks: vec![t] }))
                 .unwrap_or(ViewEffect::None),
             Action::AddToPlaylist => self
                 .selected_track()
@@ -491,13 +493,11 @@ impl LibraryView {
                     } else {
                         self.filter_query.clone()
                     },
-                    Style::default()
-                        .fg(TEXT)
-                        .bg(if self.filter_active {
-                            CURSOR_BG
-                        } else {
-                            Color::Reset
-                        }),
+                    Style::default().fg(TEXT).bg(if self.filter_active {
+                        CURSOR_BG
+                    } else {
+                        Color::Reset
+                    }),
                 ),
             ]);
             frame.render_widget(Paragraph::new(line), parts[1]);

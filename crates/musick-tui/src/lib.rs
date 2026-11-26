@@ -1,3 +1,4 @@
+pub mod app;
 pub mod keymap;
 pub mod text;
 pub mod theme;

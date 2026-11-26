@@ -67,9 +67,24 @@ pub fn runs_vec(val: &Value) -> Vec<&Value> {
 pub fn extract_thumbs(val: &Value) -> Vec<Thumb> {
     let candidates = get_array(val, &["thumbnails"])
         .or_else(|| get_array(val, &["musicThumbnailRenderer", "thumbnail", "thumbnails"]))
-        .or_else(|| get_array(val, &["thumbnail", "musicThumbnailRenderer", "thumbnail", "thumbnails"]))
+        .or_else(|| {
+            get_array(
+                val,
+                &[
+                    "thumbnail",
+                    "musicThumbnailRenderer",
+                    "thumbnail",
+                    "thumbnails",
+                ],
+            )
+        })
         .or_else(|| get_array(val, &["thumbnail", "thumbnails"]))
-        .or_else(|| get_array(val, &["croppedSquareThumbnailRenderer", "thumbnail", "thumbnails"]));
+        .or_else(|| {
+            get_array(
+                val,
+                &["croppedSquareThumbnailRenderer", "thumbnail", "thumbnails"],
+            )
+        });
 
     let Some(arr) = candidates else {
         return Vec::new();

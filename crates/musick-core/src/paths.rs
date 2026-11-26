@@ -39,7 +39,9 @@ impl AppPaths {
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR")
             .filter(|v| !v.is_empty())
             .map(|p| PathBuf::from(p).join("musick"))
-            .unwrap_or_else(|| std::env::temp_dir().join(format!("musick-rt-{}", std::process::id())));
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!("musick-rt-{}", std::process::id()))
+            });
 
         Ok(Self {
             config_dir,
@@ -88,7 +90,8 @@ impl AppPaths {
     }
 
     pub fn mpv_socket_path(&self) -> PathBuf {
-        self.runtime_dir.join(format!("mpv-{}.sock", std::process::id()))
+        self.runtime_dir
+            .join(format!("mpv-{}.sock", std::process::id()))
     }
 
     pub fn ensure_dirs(&self) -> CoreResult<()> {
@@ -118,10 +121,7 @@ pub fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> CoreResult<()> {
     }
 
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("file");
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
     let tmp_name = format!(
         ".{file_name}.{}.{}.tmp",
         std::process::id(),
