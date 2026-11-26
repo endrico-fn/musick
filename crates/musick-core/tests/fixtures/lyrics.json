@@ -1,0 +1,22 @@
+{
+  "contents": {
+    "elementRenderer": {
+      "newElement": {
+        "type": {
+          "componentType": {
+            "model": {
+              "timedLyricsModel": {
+                "lyricsData": {
+                  "timedLyricsData": [
+                    { "lyricLine": "Work it harder", "cueRange": { "startTimeMilliseconds": "12500" } },
+                    { "lyricLine": "Make it better", "cueRange": { "startTimeMilliseconds": "15000" } }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

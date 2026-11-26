@@ -1,0 +1,58 @@
+{
+  "contents": {
+    "singleColumnMusicWatchNextResultsRenderer": {
+      "tabbedRenderer": {
+        "watchNextTabbedResultsRenderer": {
+          "tabs": [
+            {
+              "tabRenderer": {
+                "title": "Up next",
+                "content": {
+                  "musicQueueRenderer": {
+                    "content": {
+                      "playlistPanelRenderer": {
+                        "playlistId": "RDAMVMseed1",
+                        "contents": [
+                          {
+                            "playlistPanelVideoRenderer": {
+                              "videoId": "rad_1",
+                              "playlistSetVideoId": "PSET_1",
+                              "title": { "runs": [{ "text": "Veridis Quo" }] },
+                              "longBylineText": {
+                                "runs": [
+                                  { "text": "Daft Punk", "navigationEndpoint": { "browseEndpoint": { "browseId": "UCdp1", "browseEndpointContextSupportedConfigs": { "browseEndpointContextMusicConfig": { "pageType": "MUSIC_PAGE_TYPE_ARTIST" } } } } },
+                                  { "text": " • " },
+                                  { "text": "Discovery", "navigationEndpoint": { "browseEndpoint": { "browseId": "MPREb_disc", "browseEndpointContextSupportedConfigs": { "browseEndpointContextMusicConfig": { "pageType": "MUSIC_PAGE_TYPE_ALBUM" } } } } }
+                                ]
+                              },
+                              "lengthText": { "runs": [{ "text": "5:45" }] }
+                            }
+                          }
+                        ],
+                        "continuations": [{
+                          "nextRadioContinuationData": { "continuation": "RADIO_CONT_NEXT_42" }
+                        }]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "tabRenderer": {
+                "title": "Lyrics",
+                "endpoint": { "browseEndpoint": { "browseId": "MPLYt_abc123" } }
+              }
+            },
+            {
+              "tabRenderer": {
+                "title": "Related",
+                "endpoint": { "browseEndpoint": { "browseId": "MPTRt_xyz789" } }
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "header": {
+    "musicDetailHeaderRenderer": {
+      "title": { "runs": [{ "text": "Discovery" }] },
+      "subtitle": {
+        "runs": [
+          { "text": "Album" },
+          { "text": " • " },
+          { "text": "Daft Punk", "navigationEndpoint": { "browseEndpoint": { "browseId": "UCdp1" } } },
+          { "text": " • " },
+          { "text": "2001" }
+        ]
+      },
+      "secondSubtitle": { "runs": [{ "text": "14 songs • 1 hour, 0 minutes" }] }
+    }
+  },
+  "contents": {
+    "singleColumnBrowseResultsRenderer": {
+      "tabs": [{
+        "tabRenderer": {
+          "content": {
+            "sectionListRenderer": {
+              "contents": [{
+                "musicShelfRenderer": {
+                  "contents": [{
+                    "musicResponsiveListItemRenderer": {
+                      "playlistItemData": { "videoId": "alb_t1" },
+                      "flexColumns": [
+                        { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "One More Time", "navigationEndpoint": { "watchEndpoint": { "videoId": "alb_t1" } } }] } } }
+                      ],
+                      "fixedColumns": [
+                        { "musicResponsiveListItemFixedColumnRenderer": { "text": { "runs": [{ "text": "5:20" }] } } }
+                      ]
+                    }
+                  }]
+                }
+              }]
+            }
+          }
+        }
+      }]
+    }
+  }
+}

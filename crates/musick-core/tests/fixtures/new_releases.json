@@ -1,0 +1,50 @@
+{
+  "contents": {
+    "singleColumnBrowseResultsRenderer": {
+      "tabs": [{
+        "tabRenderer": {
+          "content": {
+            "sectionListRenderer": {
+              "contents": [{
+                "musicCarouselShelfRenderer": {
+                  "header": {
+                    "musicCarouselShelfBasicHeaderRenderer": {
+                      "title": { "runs": [{ "text": "New albums & singles" }] }
+                    }
+                  },
+                  "contents": [{
+                    "musicTwoRowItemRenderer": {
+                      "title": { "runs": [{ "text": "Hyperdrama" }] },
+                      "subtitle": {
+                        "runs": [
+                          { "text": "Album" },
+                          { "text": " • " },
+                          { "text": "Justice", "navigationEndpoint": { "browseEndpoint": { "browseId": "UCjust1" } } },
+                          { "text": " • " },
+                          { "text": "2024" }
+                        ]
+                      },
+                      "navigationEndpoint": {
+                        "browseEndpoint": {
+                          "browseId": "MPREb_hyper",
+                          "browseEndpointContextSupportedConfigs": {
+                            "browseEndpointContextMusicConfig": { "pageType": "MUSIC_PAGE_TYPE_ALBUM" }
+                          }
+                        }
+                      },
+                      "thumbnailRenderer": {
+                        "musicThumbnailRenderer": {
+                          "thumbnail": { "thumbnails": [{ "url": "https://lh3.googleusercontent.com/hd=w226-h226-l90-rj", "width": 226, "height": 226 }] }
+                        }
+                      }
+                    }
+                  }]
+                }
+              }]
+            }
+          }
+        }
+      }]
+    }
+  }
+}

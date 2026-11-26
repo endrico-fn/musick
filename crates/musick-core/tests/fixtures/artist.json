@@ -1,0 +1,41 @@
+{
+  "header": {
+    "musicImmersiveHeaderRenderer": {
+      "title": { "runs": [{ "text": "Daft Punk" }] },
+      "description": { "runs": [{ "text": "French electronic music duo." }] },
+      "monthlyListenerCount": { "runs": [{ "text": "32.1M monthly audience" }] },
+      "startRadioButton": {
+        "buttonRenderer": {
+          "navigationEndpoint": { "watchPlaylistEndpoint": { "playlistId": "RDEMdp_radio" } }
+        }
+      }
+    }
+  },
+  "contents": {
+    "singleColumnBrowseResultsRenderer": {
+      "tabs": [{
+        "tabRenderer": {
+          "content": {
+            "sectionListRenderer": {
+              "contents": [{
+                "musicShelfRenderer": {
+                  "title": { "runs": [{ "text": "Songs" }] },
+                  "bottomEndpoint": { "browseEndpoint": { "browseId": "VLOLAK_top_songs" } },
+                  "contents": [{
+                    "musicResponsiveListItemRenderer": {
+                      "playlistItemData": { "videoId": "art_s1" },
+                      "flexColumns": [
+                        { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Harder, Better, Faster, Stronger", "navigationEndpoint": { "watchEndpoint": { "videoId": "art_s1" } } }] } } },
+                        { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Daft Punk" }, { "text": " • " }, { "text": "450M plays" }] } } }
+                      ]
+                    }
+                  }]
+                }
+              }]
+            }
+          }
+        }
+      }]
+    }
+  }
+}

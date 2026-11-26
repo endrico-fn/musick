@@ -1,0 +1,43 @@
+{
+  "header": {
+    "musicDetailHeaderRenderer": {
+      "title": { "runs": [{ "text": "Synthwave Night Drive" }] },
+      "subtitle": { "runs": [{ "text": "YouTube Music" }] },
+      "secondSubtitle": { "runs": [{ "text": "2 songs • 8 minutes" }] }
+    }
+  },
+  "contents": {
+    "singleColumnBrowseResultsRenderer": {
+      "tabs": [{
+        "tabRenderer": {
+          "content": {
+            "sectionListRenderer": {
+              "contents": [{
+                "musicPlaylistShelfRenderer": {
+                  "contents": [{
+                    "musicResponsiveListItemRenderer": {
+                      "playlistItemData": {
+                        "videoId": "pl_v1",
+                        "playlistSetVideoId": "SET_VID_001"
+                      },
+                      "flexColumns": [
+                        { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Nightcall", "navigationEndpoint": { "watchEndpoint": { "videoId": "pl_v1" } } }] } } },
+                        { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Kavinsky", "navigationEndpoint": { "browseEndpoint": { "browseId": "UCkav1" } } }] } } }
+                      ],
+                      "fixedColumns": [
+                        { "musicResponsiveListItemFixedColumnRenderer": { "text": { "runs": [{ "text": "4:18" }] } } }
+                      ]
+                    }
+                  }],
+                  "continuations": [{
+                    "nextContinuationData": { "continuation": "CONT_TOKEN_PL_2" }
+                  }]
+                }
+              }]
+            }
+          }
+        }
+      }]
+    }
+  }
+}

@@ -2,6 +2,7 @@ pub mod auth;
 pub mod config;
 pub mod domain;
 pub mod error;
+pub mod innertube;
 pub mod paths;
 pub mod protocol;
 pub mod storage;
@@ -9,6 +10,10 @@ pub mod storage;
 pub use auth::{
     AuthManager, BrowserCredentials, KeyringSecretStore, MemorySecretStore, OAuthCredentials,
     OAuthDevicePrompt, OAuthPollStatus, SecretStore, compute_sapisidhash, parse_browser_headers,
+};
+pub use innertube::{
+    CatalogApi, ClientKind, InnerTubeClient, PlaybackTelemetryEvent, PlaybackTracking,
+    PlaylistEditAction, PlaylistEditResult, RadioBatch, SongRating,
 };
 pub use storage::{CacheManager, CacheStats, OutboxOp, PruneReport, UserStore};
 
