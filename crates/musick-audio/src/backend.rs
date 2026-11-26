@@ -98,6 +98,9 @@ pub fn safe_unlink_socket(path: &Path) -> bool {
 pub trait AudioBackend: Send + Sync {
     async fn start(&self) -> AudioResult<()>;
     async fn stop(&self) -> AudioResult<()>;
+    async fn set_user_agent(&self, _user_agent: Option<&str>) -> AudioResult<()> {
+        Ok(())
+    }
     async fn load_url(&self, url: &str) -> AudioResult<()>;
     async fn append_gapless(&self, url: &str) -> AudioResult<()>;
     async fn clear_gapless_tail(&self) -> AudioResult<()>;
@@ -425,6 +428,20 @@ impl AudioBackend for MpvIpcBackend {
         Ok(())
     }
 
+    async fn set_user_agent(&self, user_agent: Option<&str>) -> AudioResult<()> {
+        if let Some(ua) = user_agent.filter(|s| !s.trim().is_empty()) {
+            self.start().await?;
+            let _ = self
+                .send_command(
+                    vec![json!("set_property"), json!("user-agent"), json!(ua)],
+                    false,
+                    Duration::from_secs(2),
+                )
+                .await;
+        }
+        Ok(())
+    }
+
     async fn load_url(&self, url: &str) -> AudioResult<()> {
         self.start().await?;
         if let Ok(mut p) = self.props.write() {
@@ -729,15 +746,24 @@ async fn handle_ipc_message(
         }
     } else if ev == "end-file" {
         let reason = msg.get("reason").and_then(Value::as_str).unwrap_or("");
-        if reason == "eof" {
-            let _ = events_tx.send(BackendEvent::Eof);
-        } else if reason == "error" {
-            let file_err = msg
-                .get("file_error")
-                .and_then(Value::as_str)
-                .unwrap_or("Playback error")
-                .to_string();
-            let _ = events_tx.send(BackendEvent::FileError(file_err));
+        if reason == "eof" || reason == "error" {
+            if let Ok(mut p) = props.write() {
+                p.buffering = false;
+                p.core_idle = true;
+                let snap = *p;
+                drop(p);
+                let _ = events_tx.send(BackendEvent::Properties(snap));
+            }
+            if reason == "eof" {
+                let _ = events_tx.send(BackendEvent::Eof);
+            } else {
+                let file_err = msg
+                    .get("file_error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Playback error")
+                    .to_string();
+                let _ = events_tx.send(BackendEvent::FileError(file_err));
+            }
         }
     }
 }

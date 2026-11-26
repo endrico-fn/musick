@@ -27,6 +27,9 @@ impl NowPlayingBar<'_> {
         if self.snapshot.resolving {
             return self.spinner.inline_text("Resolving");
         }
+        if self.snapshot.error.is_some() {
+            return String::new();
+        }
         if self.position.buffering {
             return self.spinner.inline_text("Buffering");
         }

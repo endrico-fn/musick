@@ -131,6 +131,7 @@ pub struct PlayerEngine {
     internal_tx: mpsc::UnboundedSender<InternalMsg>,
     load_gen: u64,
     retried_video_id: Option<String>,
+    last_stream_from_fast: bool,
     gapless_appended_video_id: Option<String>,
 
     radio_playlist_id: Option<String>,
@@ -178,6 +179,7 @@ impl PlayerEngine {
             internal_tx,
             load_gen: 0,
             retried_video_id: None,
+            last_stream_from_fast: false,
             gapless_appended_video_id: None,
             radio_playlist_id: None,
             radio_continuation: None,
@@ -562,10 +564,22 @@ impl PlayerEngine {
             let _ = self.store.record_play(&track);
         }
 
-        match self.resolver.resolve(&track.video_id).await {
+        let force_fallback = is_retry && self.last_stream_from_fast;
+        let resolve_res = if force_fallback {
+            self.resolver.resolve_fallback_only(&track.video_id).await
+        } else {
+            self.resolver.resolve(&track.video_id).await
+        };
+
+        match resolve_res {
             Ok(stream) => {
+                self.last_stream_from_fast = stream.from_fast_path;
                 self.snapshot.audio_info = stream.quality_label();
                 self.snapshot.resolving = false;
+                let _ = self
+                    .backend
+                    .set_user_agent(stream.user_agent.as_deref())
+                    .await;
                 if let Err(err) = self.backend.load_url(&stream.url).await {
                     self.handle_load_or_playback_error(&track, err.to_string())
                         .await;
@@ -580,6 +594,8 @@ impl PlayerEngine {
                 self.maybe_autofill_radio().await;
             }
             Err(err) => {
+                self.position.buffering = false;
+                let _ = self.pos_tx.send(self.position);
                 self.snapshot.resolving = false;
                 self.snapshot.playing = false;
                 self.snapshot.error = Some(err.to_string());
@@ -588,18 +604,22 @@ impl PlayerEngine {
         }
     }
 
-    /// Review Focus #1: if playback fails on a cached/expired 403 URL, invalidate cache & retry once.
+    /// Review Focus #1: if playback fails on a cached/expired 403 or fast-path URL,
+    /// evict cache (tripping fast-path circuit breaker if applicable) and retry once via fallback.
     async fn handle_load_or_playback_error(&mut self, track: &Track, err: String) {
         if self.retried_video_id.as_deref() != Some(track.video_id.as_str()) {
             debug!(
-                "Playback error on {}, invalidating cached URL and retrying once: {err}",
-                track.video_id
+                "Playback error on {} (fast={}), invalidating URL and retrying once: {err}",
+                track.video_id, self.last_stream_from_fast
             );
             self.retried_video_id = Some(track.video_id.clone());
-            self.resolver.invalidate(&track.video_id);
+            self.resolver
+                .report_playback_failure(&track.video_id, self.last_stream_from_fast);
             Box::pin(self.load_track(track.clone(), true)).await;
             return;
         }
+        self.position.buffering = false;
+        let _ = self.pos_tx.send(self.position);
         self.snapshot.resolving = false;
         self.snapshot.playing = false;
         self.snapshot.error = Some(err);
@@ -665,11 +685,15 @@ impl PlayerEngine {
                 if let Some(cur) = self.snapshot.track.clone() {
                     self.handle_load_or_playback_error(&cur, err).await;
                 } else {
+                    self.position.buffering = false;
+                    let _ = self.pos_tx.send(self.position);
                     self.snapshot.error = Some(err);
                     self.publish_snapshot();
                 }
             }
             BackendEvent::Disconnected(err) => {
+                self.position.buffering = false;
+                let _ = self.pos_tx.send(self.position);
                 self.snapshot.playing = false;
                 self.snapshot.error = Some(err);
                 self.publish_snapshot();
@@ -693,6 +717,9 @@ impl PlayerEngine {
         self.snapshot.error = None;
         if let Some(cached) = self.resolver.get_cached(&track.video_id) {
             self.snapshot.audio_info = cached.quality_label();
+            self.last_stream_from_fast = cached.from_fast_path;
+        } else {
+            self.last_stream_from_fast = false;
         }
         self.publish_snapshot();
 

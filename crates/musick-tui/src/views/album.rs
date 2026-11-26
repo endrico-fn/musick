@@ -179,13 +179,20 @@ impl AlbumView {
         if area.width < 20 || area.height < 8 {
             return;
         }
-        let hero_h = if area.height >= 20 { 7 } else { 5 };
+        let hero_h = if area.height >= 24 {
+            9
+        } else if area.height >= 16 {
+            7
+        } else {
+            5
+        };
         let parts = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(hero_h), Constraint::Min(4)])
             .split(area);
 
-        let cov_w = hero_h.saturating_mul(2).min(16);
+        let max_cov_w = area.width.saturating_sub(20).min(area.width / 3).max(10);
+        let cov_w = covers.square_panel_width(hero_h, max_cov_w);
         let hero_cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([

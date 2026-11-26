@@ -2509,6 +2509,7 @@ dependencies = [
  "mpris-server",
  "musick-core",
  "rand 0.10.4",
+ "reqwest 0.13.5",
  "rustypipe",
  "serde",
  "serde_json",

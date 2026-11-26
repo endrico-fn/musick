@@ -683,23 +683,24 @@ impl HomeView {
             return;
         }
 
-        // 2×2 Home Layout (Top ~61%, Bottom ~39% min 5 rows)
-        let top_h = ((u32::from(area.height) * 61) / 100)
+        // 2×2 Home Layout (Top ~61%, Bottom ~39% min 5 rows).
+        // Keep the top-left `Now Playing` panel a true 1:1 visual square using the real
+        // terminal cell aspect ratio while preserving comfortable room for `Discover`.
+        let max_cover_w = ((u32::from(area.width) * 44) / 100)
+            .min(u32::from(area.width.saturating_sub(24)))
+            .max(12) as u16;
+        let max_square_h = ((f64::from(max_cover_w) / covers.cell_aspect()).floor() as u16).max(6);
+        let base_top_h = ((u32::from(area.height) * 61) / 100)
             .max(6)
             .min(u32::from(area.height.saturating_sub(5))) as u16;
+        let top_h = base_top_h.min(max_square_h).max(6);
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(top_h), Constraint::Min(5)])
             .split(area);
 
-        // Top Row: Cover (left) + Main Discover/Search/Lyrics Panel (right) with 1-cell gap
-        let cover_w = if area.width >= 100 {
-            30
-        } else if area.width >= 80 {
-            24
-        } else {
-            18
-        };
+        // Top Row: Square 1:1 Cover (left) + Main Discover/Search/Lyrics Panel (right) with 1-cell gap
+        let cover_w = covers.square_panel_width(top_h, max_cover_w);
         let top_cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([

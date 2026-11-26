@@ -73,7 +73,9 @@ mod widget_render_tests {
         AuthMode, CavaPalette, LyricLine, Lyrics, PlaybackSnapshot, PositionTick, Track,
     };
     use musick_tui::theme::{UNICODE_ICONS, WARN_GOLD};
-    use musick_tui::widgets::{BrailleSpinner, CavaWidget, LyricsBox, NowPlayingBar, TopBar};
+    use musick_tui::widgets::{
+        BrailleSpinner, CavaWidget, CoverRenderer, LyricsBox, NowPlayingBar, TopBar,
+    };
 
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
         let buf = terminal.backend().buffer();
@@ -221,5 +223,72 @@ mod widget_render_tests {
         assert!(rendered.contains("Active chorus"));
         assert!(rendered.contains("Reff aktif"));
         assert!(rendered.contains('█'));
+    }
+
+    #[test]
+    fn now_playing_bar_hides_buffering_spinner_when_error_is_active() {
+        let mut term = Terminal::new(TestBackend::new(100, 10)).unwrap();
+        let snap = PlaybackSnapshot {
+            track: Some(Track::minimal("v1", "One Last Breath")),
+            playing: false,
+            resolving: false,
+            error: Some("loading failed".into()),
+            ..PlaybackSnapshot::default()
+        };
+        let pos = PositionTick {
+            position_secs: 0.0,
+            duration_secs: 0.0,
+            buffering: true,
+            active_lyric_idx: None,
+        };
+        term.draw(|f| {
+            f.render_widget(
+                NowPlayingBar {
+                    snapshot: &snap,
+                    position: pos,
+                    icons: UNICODE_ICONS,
+                    spinner: BrailleSpinner::new(false),
+                    focused: false,
+                },
+                Rect::new(0, 0, 100, 5),
+            );
+        })
+        .unwrap();
+
+        let rendered = buffer_text(&term);
+        assert!(rendered.contains("Error: loading failed"));
+        assert!(!rendered.contains("Buffering"));
+    }
+
+    #[test]
+    fn cover_renderer_computes_true_1_to_1_square_panel_and_inner_rect_for_real_font_aspect() {
+        for (fw, fh) in [(8u16, 16u16), (9, 20), (10, 22)] {
+            let covers = CoverRenderer::with_font_size((fw, fh));
+            let panel_h = 19u16;
+            let panel_w = covers.square_panel_width(panel_h, 70);
+
+            // Outer bordered panel visual pixel aspect must be within ±5% of 1:1 square
+            let outer_px_w = f64::from(panel_w) * f64::from(fw);
+            let outer_px_h = f64::from(panel_h) * f64::from(fh);
+            let outer_ratio = outer_px_w / outer_px_h;
+            assert!(
+                (0.95..=1.05).contains(&outer_ratio),
+                "font ({fw}x{fh}): outer {panel_w}x{panel_h} has ratio {outer_ratio:.3}"
+            );
+
+            // Inner cover rect fills 100% of inner height (zero vertical dead space below cover)
+            let inner = Rect::new(1, 1, panel_w - 2, panel_h - 2);
+            let sq = covers.square_rect(inner);
+            assert_eq!(sq.height, inner.height);
+            assert!(sq.width <= inner.width);
+            let inner_ratio =
+                (f64::from(sq.width) * f64::from(fw)) / (f64::from(sq.height) * f64::from(fh));
+            assert!(
+                (0.98..=1.08).contains(&inner_ratio),
+                "font ({fw}x{fh}): inner {}x{} has ratio {inner_ratio:.3}",
+                sq.width,
+                sq.height
+            );
+        }
     }
 }

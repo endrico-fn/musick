@@ -22,19 +22,16 @@ const MAX_PROTO_CACHE: usize = 64;
 pub struct CoverRenderer {
     picker: Picker,
     detected_protocol: ProtocolType,
+    font_size: (u16, u16),
     protocols: HashMap<String, StatefulProtocol>,
     order: VecDeque<String>,
 }
 
 impl CoverRenderer {
     pub fn detect(pref: ImageProtocol) -> Self {
-        let mut picker = match pref {
-            ImageProtocol::Halfblock => Picker::halfblocks(),
-            ImageProtocol::Auto | ImageProtocol::Kitty | ImageProtocol::Sixel => {
-                Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
-            }
-        };
+        let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
         let detected_protocol = picker.protocol_type();
+        let fs = picker.font_size();
         match pref {
             ImageProtocol::Auto => {}
             ImageProtocol::Kitty => picker.set_protocol_type(ProtocolType::Kitty),
@@ -44,18 +41,41 @@ impl CoverRenderer {
         Self {
             picker,
             detected_protocol,
+            font_size: (fs.width, fs.height),
             protocols: HashMap::new(),
             order: VecDeque::new(),
         }
     }
 
     pub fn halfblocks_for_test() -> Self {
+        Self::with_font_size((8, 16))
+    }
+
+    pub fn with_font_size(font_size: (u16, u16)) -> Self {
+        let picker = Picker::halfblocks();
         Self {
-            picker: Picker::halfblocks(),
+            picker,
             detected_protocol: ProtocolType::Halfblocks,
+            font_size,
             protocols: HashMap::new(),
             order: VecDeque::new(),
         }
+    }
+
+    /// Return terminal cell pixel aspect ratio (`font_height / font_width`), clamped to `1.5..=3.0`.
+    pub fn cell_aspect(&self) -> f64 {
+        let (fw, fh) = self.font_size;
+        if fw > 0 && fh > 0 {
+            (f64::from(fh) / f64::from(fw)).clamp(1.5, 3.0)
+        } else {
+            2.0
+        }
+    }
+
+    /// Compute the outer column width so a bordered panel of `panel_height` rows forms a 1:1 visual square.
+    pub fn square_panel_width(&self, panel_height: u16, max_width: u16) -> u16 {
+        let desired = (f64::from(panel_height) * self.cell_aspect()).round() as u16;
+        desired.min(max_width).max(6.min(max_width))
     }
 
     pub fn set_protocol(&mut self, pref: ImageProtocol) -> bool {
@@ -97,18 +117,23 @@ impl CoverRenderer {
         self.protocols.contains_key(url)
     }
 
-    /// Compute a 1:1 visual square centered inside `area` (terminal cell height ≈ 2× width).
-    pub fn square_rect(area: Rect) -> Rect {
+    /// Compute a 1:1 visual square centered inside `area` using the actual terminal cell aspect ratio.
+    pub fn square_rect(&self, area: Rect) -> Rect {
         if area.width < 2 || area.height == 0 {
             return Rect::default();
         }
-        let max_h = area.height;
-        let max_w_from_h = max_h.saturating_mul(2);
-        let (w, h) = if max_w_from_h <= area.width {
-            (max_w_from_h, max_h)
+        let aspect = self.cell_aspect();
+        let w_for_full_h = (f64::from(area.height) * aspect).ceil() as u16;
+        let (w, h) = if w_for_full_h <= area.width {
+            (w_for_full_h.max(2), area.height)
         } else {
-            let h_fit = (area.width / 2).max(1);
-            (h_fit.saturating_mul(2).min(area.width), h_fit)
+            let h_fit = ((f64::from(area.width) / aspect).floor() as u16)
+                .max(1)
+                .min(area.height);
+            let w_fit = ((f64::from(h_fit) * aspect).ceil() as u16)
+                .min(area.width)
+                .max(2);
+            (w_fit, h_fit)
         };
         let x = area.x + (area.width.saturating_sub(w)) / 2;
         let y = area.y + (area.height.saturating_sub(h)) / 2;
@@ -132,7 +157,7 @@ impl CoverRenderer {
         if area.width < 2 || area.height == 0 {
             return;
         }
-        let target = Self::square_rect(area);
+        let target = self.square_rect(area);
         if target.width < 2 || target.height == 0 {
             return;
         }

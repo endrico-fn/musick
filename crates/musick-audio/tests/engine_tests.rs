@@ -115,6 +115,7 @@ impl StreamBackend for CountingStreamBackend {
             codec: "opus".into(),
             bitrate: 128,
             sample_rate: 48_000,
+            user_agent: None,
         })
     }
 }
@@ -486,7 +487,120 @@ async fn eof_with_autoplay_autofills_and_advances_and_properties_do_not_resurrec
     }));
     tokio::time::sleep(Duration::from_millis(40)).await;
     assert!(!handle.snapshot().playing);
+    assert!(!handle.position().buffering);
     assert_eq!(handle.snapshot().volume, 85);
+
+    handle.send(AppCommand::Shutdown).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), join).await;
+}
+
+struct TaggedStreamBackend {
+    tag: &'static str,
+}
+
+#[async_trait]
+impl StreamBackend for TaggedStreamBackend {
+    async fn resolve(&self, video_id: &str, _quality: AudioQuality) -> AudioResult<RawStream> {
+        Ok(RawStream {
+            url: format!(
+                "https://stream.invalid/{video_id}?backend={}&expire=9999999999",
+                self.tag
+            ),
+            codec: "opus".into(),
+            bitrate: 130,
+            sample_rate: 48_000,
+            user_agent: Some(format!("UA-{}", self.tag)),
+        })
+    }
+}
+
+#[tokio::test]
+async fn fast_path_loading_failed_retries_via_fallback_and_final_error_clears_buffering() {
+    let dir = tempdir().unwrap();
+    let paths = AppPaths::from_roots(
+        dir.path().join("cfg"),
+        dir.path().join("data"),
+        dir.path().join("cache"),
+        dir.path().join("rt"),
+    );
+    let store = Arc::new(UserStore::open(&paths).unwrap());
+    let cache = Arc::new(CacheManager::open(&paths, CacheSettings::default()).unwrap());
+    let auth = Arc::new(AuthManager::new_anonymous(
+        Arc::new(MemorySecretStore::new()),
+        musick_core::build_http_client(),
+    ));
+    let catalog = Arc::new(MockEngineCatalog::default());
+    let backend = Arc::new(MockAudioBackend::new());
+    let resolver = Arc::new(HybridStreamResolver::with_backends(
+        Some(Arc::new(TaggedStreamBackend { tag: "rustypipe" })),
+        Arc::new(TaggedStreamBackend { tag: "ytdlp" }),
+        AudioQuality::Best,
+        Arc::new(|| 1000.0),
+    ));
+
+    let mut settings = Settings::default();
+    settings.lyrics.enabled = false;
+    let lyrics = Arc::new(
+        LyricsService::new(
+            Some(catalog.clone()),
+            cache,
+            musick_core::build_http_client(),
+            settings.clone(),
+        )
+        .with_ytdlp_captions(false),
+    );
+
+    let (handle, join) = PlayerEngine::spawn(PlayerEngineDeps {
+        backend: backend.clone(),
+        resolver: resolver.clone(),
+        catalog,
+        lyrics,
+        store,
+        auth,
+        settings,
+    });
+
+    // 1. Initial play hits fast-path ("rustypipe")
+    handle
+        .send(AppCommand::PlayTracks {
+            tracks: vec![Track::minimal("creed1", "One Last Breath")],
+            start_index: 0,
+            autoplay: false,
+        })
+        .await;
+    for _ in 0..30 {
+        if !backend.loaded_urls.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(backend.loaded_urls.lock().unwrap()[0].contains("backend=rustypipe"));
+
+    // 2. mpv emits "loading failed" -> engine MUST trip circuit breaker & retry directly on "ytdlp"
+    backend.emit(BackendEvent::FileError("loading failed".into()));
+    for _ in 0..30 {
+        if backend.loaded_urls.lock().unwrap().len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let urls = backend.loaded_urls.lock().unwrap().clone();
+    assert_eq!(urls.len(), 2);
+    assert!(urls[1].contains("backend=ytdlp"));
+    assert!(resolver.is_fast_circuit_open());
+    assert!(handle.snapshot().error.is_none());
+
+    // 3. If fallback also fails, error is surfaced AND position.buffering MUST be false
+    backend.emit(BackendEvent::FileError("loading failed".into()));
+    for _ in 0..30 {
+        if handle.snapshot().error.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(handle.snapshot().error.as_deref(), Some("loading failed"));
+    assert!(!handle.position().buffering);
+    assert!(!handle.snapshot().playing);
 
     handle.send(AppCommand::Shutdown).await;
     let _ = tokio::time::timeout(Duration::from_secs(2), join).await;

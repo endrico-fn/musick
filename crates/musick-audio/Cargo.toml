@@ -16,6 +16,7 @@ fast-resolver = ["dep:rustypipe"]
 async-trait.workspace = true
 musick-core = { path = "../musick-core" }
 rand.workspace = true
+reqwest.workspace = true
 rustypipe = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

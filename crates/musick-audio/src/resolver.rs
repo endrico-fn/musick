@@ -32,6 +32,7 @@ pub struct RawStream {
     pub codec: String,
     pub bitrate: u32,
     pub sample_rate: u32,
+    pub user_agent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -43,6 +44,8 @@ pub struct ResolvedStream {
     pub bitrate: u32,
     pub sample_rate: u32,
     pub quality: AudioQuality,
+    pub user_agent: Option<String>,
+    pub from_fast_path: bool,
 }
 
 impl ResolvedStream {
@@ -98,6 +101,7 @@ pub trait StreamBackend: Send + Sync {
 #[cfg(feature = "fast-resolver")]
 pub struct RustyPipeBackend {
     client: rustypipe::client::RustyPipe,
+    probe_http: reqwest::Client,
 }
 
 #[cfg(feature = "fast-resolver")]
@@ -111,7 +115,12 @@ impl RustyPipeBackend {
             .timeout(Duration::from_secs(12))
             .build()
             .map_err(|e| AudioError::Resolver(format!("RustyPipe init failed: {e}")))?;
-        Ok(Self { client })
+        let probe_http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(4))
+            .connect_timeout(Duration::from_secs(3))
+            .build()
+            .unwrap_or_default();
+        Ok(Self { client, probe_http })
     }
 }
 
@@ -169,6 +178,22 @@ impl StreamBackend for RustyPipeBackend {
         }
         .ok_or_else(|| AudioError::Resolver("No suitable RustyPipe audio stream".into()))?;
 
+        // Probe first byte to ensure googlevideo does not reject this URL with HTTP 403
+        // (e.g. when rustypipe-botguard is not installed and iOS/TV clients are throttled/blocked).
+        let probe = self
+            .probe_http
+            .get(&picked.url)
+            .header(reqwest::header::RANGE, "bytes=0-0")
+            .send()
+            .await
+            .map_err(|e| AudioError::Resolver(format!("RustyPipe stream probe failed: {e}")))?;
+        if !probe.status().is_success() {
+            return Err(AudioError::Resolver(format!(
+                "RustyPipe stream rejected with HTTP {}",
+                probe.status()
+            )));
+        }
+
         let codec = if is_opus(picked) {
             "opus".to_string()
         } else if picked.mime.to_ascii_lowercase().contains("mp4") {
@@ -183,6 +208,7 @@ impl StreamBackend for RustyPipeBackend {
             codec,
             bitrate: kbps,
             sample_rate: 48_000,
+            user_agent: None,
         })
     }
 }
@@ -247,7 +273,7 @@ impl StreamBackend for YtDlpBackend {
                 "--format-sort",
                 sort_spec,
                 "--print",
-                "%(acodec)s\t%(abr)s\t%(asr)s",
+                "%(acodec)s\t%(abr)s\t%(asr)s\t%(http_headers.User-Agent)s",
                 "-g",
                 &target,
             ])
@@ -287,6 +313,7 @@ impl StreamBackend for YtDlpBackend {
         let mut codec = String::new();
         let mut bitrate = 0u32;
         let mut sample_rate = 0u32;
+        let mut user_agent = None;
 
         let url = if lines[0].contains('\t') && lines.len() >= 2 {
             let parts: Vec<&str> = lines[0].split('\t').collect();
@@ -305,6 +332,11 @@ impl StreamBackend for YtDlpBackend {
             {
                 sample_rate = val.round().max(0.0) as u32;
             }
+            if let Some(&ua) = parts.get(3)
+                && !matches!(ua, "NA" | "none" | "None" | "")
+            {
+                user_agent = Some(ua.to_string());
+            }
             lines[1].to_string()
         } else {
             lines[0].to_string()
@@ -315,6 +347,7 @@ impl StreamBackend for YtDlpBackend {
             codec,
             bitrate,
             sample_rate,
+            user_agent,
         })
     }
 }
@@ -468,6 +501,17 @@ impl HybridStreamResolver {
         }
     }
 
+    /// Record a playback failure (e.g. mpv HTTP 403 / loading failed) for a previously resolved URL.
+    /// Evicts the broken entry and immediately opens the fast-path circuit breaker when the URL
+    /// originated from the fast-path backend so the retry routes straight to `yt-dlp`.
+    pub fn report_playback_failure(&self, video_id: &str, was_fast_path: bool) {
+        self.invalidate(video_id);
+        if was_fast_path && let Ok(mut cb) = self.circuit.lock() {
+            cb.consecutive_failures = CIRCUIT_BREAKER_THRESHOLD;
+            cb.cooldown_until = (self.clock)() + CIRCUIT_BREAKER_COOLDOWN_SECS;
+        }
+    }
+
     pub fn clear_cache(&self) {
         if let Ok(mut cache) = self.cache.lock() {
             cache.clear();
@@ -483,12 +527,31 @@ impl HybridStreamResolver {
     }
 
     pub async fn resolve(&self, video_id: &str) -> AudioResult<ResolvedStream> {
-        if let Some(cached) = self.get_cached(video_id) {
+        self.resolve_inner(video_id, false).await
+    }
+
+    /// Resolve strictly via the fallback backend (`yt-dlp`), bypassing fast-path and cache.
+    pub async fn resolve_fallback_only(&self, video_id: &str) -> AudioResult<ResolvedStream> {
+        self.invalidate(video_id);
+        self.resolve_inner(video_id, true).await
+    }
+
+    async fn resolve_inner(
+        &self,
+        video_id: &str,
+        force_fallback: bool,
+    ) -> AudioResult<ResolvedStream> {
+        if !force_fallback && let Some(cached) = self.get_cached(video_id) {
             return Ok(cached);
         }
 
         // Lossless single-flight deduplication via `watch` channel + RAII drop guard:
         // zero lost wakeups and guaranteed cleanup if the leader future is cancelled.
+        let inflight_key = if force_fallback {
+            format!("fb:{video_id}")
+        } else {
+            video_id.to_string()
+        };
         let leader_tx = loop {
             enum Slot {
                 Leader(watch::Sender<ResolverOutcome>),
@@ -500,11 +563,11 @@ impl HybridStreamResolver {
                     .inflight
                     .lock()
                     .map_err(|_| AudioError::Resolver("Resolver inflight lock poisoned".into()))?;
-                if let Some(existing) = map.get(video_id) {
+                if let Some(existing) = map.get(&inflight_key) {
                     Slot::Waiter(existing.clone())
                 } else {
                     let (tx, rx) = watch::channel(None);
-                    map.insert(video_id.to_string(), rx);
+                    map.insert(inflight_key.clone(), rx);
                     Slot::Leader(tx)
                 }
             };
@@ -520,7 +583,7 @@ impl HybridStreamResolver {
                     {
                         return done.map_err(AudioError::Resolver);
                     }
-                    if let Some(cached) = self.get_cached(video_id) {
+                    if !force_fallback && let Some(cached) = self.get_cached(video_id) {
                         return Ok(cached);
                     }
                     // Leader was cancelled before publishing; loop to become leader.
@@ -530,10 +593,10 @@ impl HybridStreamResolver {
 
         let _guard = ResolverInflightGuard {
             map: &self.inflight,
-            key: video_id.to_string(),
+            key: inflight_key,
         };
 
-        let result = self.resolve_uncached(video_id).await;
+        let result = self.resolve_uncached(video_id, force_fallback).await;
         let outcome = match &result {
             Ok(stream) => Ok(stream.clone()),
             Err(err) => Err(err.to_string()),
@@ -559,11 +622,16 @@ impl HybridStreamResolver {
         });
     }
 
-    async fn resolve_uncached(&self, video_id: &str) -> AudioResult<ResolvedStream> {
+    async fn resolve_uncached(
+        &self,
+        video_id: &str,
+        force_fallback: bool,
+    ) -> AudioResult<ResolvedStream> {
         let quality = self.audio_quality();
         let now = (self.clock)();
 
-        let raw = if let Some(ref fast_backend) = self.fast
+        let (raw, from_fast_path) = if !force_fallback
+            && let Some(ref fast_backend) = self.fast
             && !self.is_fast_circuit_open()
         {
             match fast_backend.resolve(video_id, quality).await {
@@ -572,7 +640,7 @@ impl HybridStreamResolver {
                         cb.consecutive_failures = 0;
                         cb.cooldown_until = 0.0;
                     }
-                    stream
+                    (stream, true)
                 }
                 Err(fast_err) => {
                     debug!(
@@ -584,11 +652,11 @@ impl HybridStreamResolver {
                             cb.cooldown_until = now + CIRCUIT_BREAKER_COOLDOWN_SECS;
                         }
                     }
-                    self.fallback.resolve(video_id, quality).await?
+                    (self.fallback.resolve(video_id, quality).await?, false)
                 }
             }
         } else {
-            self.fallback.resolve(video_id, quality).await?
+            (self.fallback.resolve(video_id, quality).await?, false)
         };
 
         let expires_at = parse_stream_expiry(&raw.url, (self.clock)(), DEFAULT_STREAM_TTL_SECS);
@@ -600,6 +668,8 @@ impl HybridStreamResolver {
             bitrate: raw.bitrate,
             sample_rate: raw.sample_rate,
             quality,
+            user_agent: raw.user_agent,
+            from_fast_path,
         };
 
         if let Ok(mut cache) = self.cache.lock() {

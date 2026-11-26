@@ -371,6 +371,7 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
                 codec: "opus".into(),
                 bitrate: 128,
                 sample_rate: 48_000,
+                user_agent: None,
             })
         }
     }
@@ -1177,6 +1178,7 @@ async fn app_playlists_immediate_sync_and_authoritative_toggle_save_with_error_g
                 codec: "opus".into(),
                 bitrate: 128,
                 sample_rate: 48_000,
+                user_agent: None,
             })
         }
     }

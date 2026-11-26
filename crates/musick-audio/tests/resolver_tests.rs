@@ -50,6 +50,7 @@ impl StreamBackend for MockBackend {
             codec: "opus".into(),
             bitrate: 131,
             sample_rate: 48_000,
+            user_agent: None,
         })
     }
 }
@@ -159,4 +160,42 @@ async fn single_flight_recovers_cleanly_when_leader_is_cancelled_without_deadloc
         .unwrap();
     assert_eq!(res.video_id, "vid_cancel");
     assert!(res.url.contains("id=vid_cancel"));
+}
+
+#[tokio::test]
+async fn report_playback_failure_opens_circuit_breaker_and_resolve_fallback_only_bypasses_fast() {
+    let clock_val = Arc::new(AtomicU64::new(10_000));
+    let clock_ref = clock_val.clone();
+
+    // Fast backend returns Ok(url), simulating a RustyPipe URL that later gets HTTP 403 in mpv.
+    let fast = Arc::new(MockBackend::new("rustypipe", false, 0));
+    let fallback = Arc::new(MockBackend::new("ytdlp", false, 0));
+
+    let resolver = HybridStreamResolver::with_backends(
+        Some(fast.clone()),
+        fallback.clone(),
+        AudioQuality::Best,
+        Arc::new(move || clock_ref.load(Ordering::SeqCst) as f64),
+    );
+
+    let first = resolver.resolve("vid_403").await.unwrap();
+    assert!(first.from_fast_path);
+    assert!(first.url.contains("src=rustypipe"));
+    assert!(!resolver.is_fast_circuit_open());
+
+    // Simulate mpv reporting "loading failed" on the fast-path URL.
+    resolver.report_playback_failure("vid_403", first.from_fast_path);
+    assert!(resolver.get_cached("vid_403").is_none());
+    assert!(resolver.is_fast_circuit_open());
+
+    // Explicit fallback-only retry and subsequent resolves must route strictly to yt-dlp.
+    let retried = resolver.resolve_fallback_only("vid_403").await.unwrap();
+    assert!(!retried.from_fast_path);
+    assert!(retried.url.contains("src=ytdlp"));
+
+    let next_track = resolver.resolve("vid_next").await.unwrap();
+    assert!(!next_track.from_fast_path);
+    assert!(next_track.url.contains("src=ytdlp"));
+    assert_eq!(fast.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fallback.calls.load(Ordering::SeqCst), 2);
 }
