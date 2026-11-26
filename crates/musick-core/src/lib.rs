@@ -1,8 +1,14 @@
+pub mod auth;
 pub mod config;
 pub mod domain;
 pub mod error;
 pub mod paths;
 pub mod protocol;
+
+pub use auth::{
+    AuthManager, BrowserCredentials, KeyringSecretStore, MemorySecretStore, OAuthCredentials,
+    OAuthDevicePrompt, OAuthPollStatus, SecretStore, compute_sapisidhash, parse_browser_headers,
+};
 
 pub use config::{
     AudioQuality, AuthMode, CacheSettings, CavaAudioSource, CavaPalette, CavaSmoothing, CoverSize,
