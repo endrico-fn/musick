@@ -205,6 +205,8 @@ pub struct Album {
     pub description: Option<String>,
     #[serde(default)]
     pub duration_text: Option<String>,
+    #[serde(default)]
+    pub audio_playlist_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]

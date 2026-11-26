@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use tokio::process::Command;
-use tokio::sync::Notify;
+use tokio::sync::watch;
 use tracing::debug;
 
 #[cfg(feature = "fast-resolver")]
@@ -368,12 +368,28 @@ impl StreamLru {
     }
 }
 
+type ResolverOutcome = Option<Result<ResolvedStream, String>>;
+type ResolverInflightMap = Mutex<HashMap<String, watch::Receiver<ResolverOutcome>>>;
+
+struct ResolverInflightGuard<'a> {
+    map: &'a ResolverInflightMap,
+    key: String,
+}
+
+impl Drop for ResolverInflightGuard<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.map.lock() {
+            guard.remove(&self.key);
+        }
+    }
+}
+
 pub struct HybridStreamResolver {
     fast: Option<Arc<dyn StreamBackend>>,
     fallback: Arc<dyn StreamBackend>,
     quality: RwLock<AudioQuality>,
     cache: Mutex<StreamLru>,
-    inflight: Mutex<HashMap<String, Arc<Notify>>>,
+    inflight: ResolverInflightMap,
     circuit: Mutex<CircuitState>,
     clock: Arc<dyn Fn() -> f64 + Send + Sync>,
 }
@@ -471,39 +487,58 @@ impl HybridStreamResolver {
             return Ok(cached);
         }
 
-        // Single-flight deduplication per video_id
-        loop {
-            let waiter = {
+        // Lossless single-flight deduplication via `watch` channel + RAII drop guard:
+        // zero lost wakeups and guaranteed cleanup if the leader future is cancelled.
+        let leader_tx = loop {
+            enum Slot {
+                Leader(watch::Sender<ResolverOutcome>),
+                Waiter(watch::Receiver<ResolverOutcome>),
+            }
+
+            let slot = {
                 let mut map = self
                     .inflight
                     .lock()
                     .map_err(|_| AudioError::Resolver("Resolver inflight lock poisoned".into()))?;
                 if let Some(existing) = map.get(video_id) {
-                    Some(existing.clone())
+                    Slot::Waiter(existing.clone())
                 } else {
-                    map.insert(video_id.to_string(), Arc::new(Notify::new()));
-                    None
+                    let (tx, rx) = watch::channel(None);
+                    map.insert(video_id.to_string(), rx);
+                    Slot::Leader(tx)
                 }
             };
 
-            if let Some(notify) = waiter {
-                notify.notified().await;
-                if let Some(cached) = self.get_cached(video_id) {
-                    return Ok(cached);
+            match slot {
+                Slot::Leader(tx) => break tx,
+                Slot::Waiter(mut rx) => {
+                    if let Some(done) = rx.borrow().clone() {
+                        return done.map_err(AudioError::Resolver);
+                    }
+                    if rx.changed().await.is_ok()
+                        && let Some(done) = rx.borrow().clone()
+                    {
+                        return done.map_err(AudioError::Resolver);
+                    }
+                    if let Some(cached) = self.get_cached(video_id) {
+                        return Ok(cached);
+                    }
+                    // Leader was cancelled before publishing; loop to become leader.
                 }
-                continue;
             }
-            break;
-        }
+        };
+
+        let _guard = ResolverInflightGuard {
+            map: &self.inflight,
+            key: video_id.to_string(),
+        };
 
         let result = self.resolve_uncached(video_id).await;
-
-        if let Ok(mut map) = self.inflight.lock()
-            && let Some(notify) = map.remove(video_id)
-        {
-            notify.notify_waiters();
-        }
-
+        let outcome = match &result {
+            Ok(stream) => Ok(stream.clone()),
+            Err(err) => Err(err.to_string()),
+        };
+        let _ = leader_tx.send(Some(outcome));
         result
     }
 

@@ -727,10 +727,22 @@ pub fn parse_artist(browse_id: &str, raw: &Value) -> Artist {
                     "startRadioButton",
                     "buttonRenderer",
                     "navigationEndpoint",
-                    "watchPlaylistEndpoint",
+                    "watchEndpoint",
                     "playlistId",
                 ],
             )
+            .or_else(|| {
+                get_str(
+                    h,
+                    &[
+                        "startRadioButton",
+                        "buttonRenderer",
+                        "navigationEndpoint",
+                        "watchPlaylistEndpoint",
+                        "playlistId",
+                    ],
+                )
+            })
         })
         .map(str::to_string);
     let shuffle_id = header
@@ -741,10 +753,22 @@ pub fn parse_artist(browse_id: &str, raw: &Value) -> Artist {
                     "playButton",
                     "buttonRenderer",
                     "navigationEndpoint",
-                    "watchPlaylistEndpoint",
+                    "watchEndpoint",
                     "playlistId",
                 ],
             )
+            .or_else(|| {
+                get_str(
+                    h,
+                    &[
+                        "playButton",
+                        "buttonRenderer",
+                        "navigationEndpoint",
+                        "watchPlaylistEndpoint",
+                        "playlistId",
+                    ],
+                )
+            })
         })
         .map(str::to_string);
 
@@ -1000,6 +1024,14 @@ pub fn parse_album(browse_id: &str, raw: &Value) -> Album {
         }
     }
 
+    let mut playlist_ids = Vec::new();
+    find_all_by_key(raw, "playlistId", &mut playlist_ids);
+    let audio_playlist_id = playlist_ids
+        .into_iter()
+        .filter_map(Value::as_str)
+        .find(|s| s.starts_with("OLAK"))
+        .map(str::to_string);
+
     Album {
         summary: AlbumSummary {
             browse_id: browse_id.to_string(),
@@ -1012,6 +1044,7 @@ pub fn parse_album(browse_id: &str, raw: &Value) -> Album {
         tracks,
         description,
         duration_text,
+        audio_playlist_id,
     }
 }
 
@@ -1039,9 +1072,39 @@ pub fn parse_playlist(playlist_id: &str, raw: &Value) -> (Playlist, Option<Strin
         .and_then(runs_text)
         .unwrap_or_else(|| "Playlist".to_string());
     let thumbs = header.map(extract_thumbs).unwrap_or_default();
-    let author = header
-        .and_then(|h| h.get("straplineTextOne").or_else(|| h.get("subtitle")))
-        .and_then(runs_text);
+    let author = header.and_then(|h| {
+        h.get("straplineTextOne")
+            .and_then(runs_text)
+            .or_else(|| {
+                get_str(h, &["facepile", "avatarStackViewModel", "text", "content"])
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                get_str(
+                    h,
+                    &[
+                        "facepile",
+                        "avatarStackViewModel",
+                        "rendererContext",
+                        "accessibilityContext",
+                        "label",
+                    ],
+                )
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+            })
+            .or_else(|| {
+                let sub = h.get("subtitle").and_then(runs_text)?;
+                if sub.to_ascii_lowercase().starts_with("playlist") {
+                    None
+                } else {
+                    Some(sub)
+                }
+            })
+    });
     let description = header
         .and_then(|h| {
             h.get("description").or_else(|| {

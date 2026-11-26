@@ -4,11 +4,11 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use musick_core::{AppCommand, Playlist, SavedCollectionKind};
+use musick_core::{AppCommand, Playlist, SavedCollectionKind, Track};
 
 use crate::keymap::Action;
 use crate::text::{Align, trunc_cells};
-use crate::theme::{ACCENT, DIM, TEXT, panel_block};
+use crate::theme::{ACCENT, CURSOR_BG, DIM, TEXT, panel_block};
 use crate::views::{RenderCtx, ViewEffect};
 use crate::widgets::{ColumnDef, CoverRenderer, TableRow, TrackTable};
 
@@ -19,6 +19,8 @@ pub struct PlaylistDetailView {
     pub loading: bool,
     pub saved: bool,
     pub cursor: usize,
+    pub filter_active: bool,
+    pub filter_query: String,
 }
 
 impl PlaylistDetailView {
@@ -30,7 +32,17 @@ impl PlaylistDetailView {
             loading: true,
             saved,
             cursor: 0,
+            filter_active: false,
+            filter_query: String::new(),
         }
+    }
+
+    pub fn is_insert_mode(&self) -> bool {
+        self.filter_active
+    }
+
+    pub fn has_filter(&self) -> bool {
+        !self.filter_query.is_empty()
     }
 
     pub fn set_playlist(&mut self, playlist: Playlist) {
@@ -40,9 +52,28 @@ impl PlaylistDetailView {
         self.cursor = 0;
     }
 
+    fn filtered_tracks(&self) -> Vec<&Track> {
+        let Some(ref pl) = self.playlist else {
+            return Vec::new();
+        };
+        let q = self.filter_query.trim().to_lowercase();
+        if q.is_empty() {
+            pl.tracks.iter().collect()
+        } else {
+            pl.tracks
+                .iter()
+                .filter(|t| {
+                    t.title.to_lowercase().contains(&q)
+                        || t.artist_names().to_lowercase().contains(&q)
+                })
+                .collect()
+        }
+    }
+
     pub fn footer_hints(&self) -> &'static [(&'static str, &'static str)] {
         &[
             ("Enter/p", "play"),
+            ("/", "filter"),
             ("N/a", "next/queue"),
             ("P/f", "add/like"),
             ("w", "save to Library"),
@@ -53,8 +84,43 @@ impl PlaylistDetailView {
     }
 
     pub fn handle_action(&mut self, action: Action) -> ViewEffect {
-        let len = self.playlist.as_ref().map(|p| p.tracks.len()).unwrap_or(0);
+        if self.filter_active {
+            return match action {
+                Action::InputChar(ch) => {
+                    self.filter_query.push(ch);
+                    self.cursor = 0;
+                    ViewEffect::None
+                }
+                Action::InputBackspace => {
+                    self.filter_query.pop();
+                    self.cursor = 0;
+                    ViewEffect::None
+                }
+                Action::InputSubmit | Action::InputCancel => {
+                    self.filter_active = false;
+                    ViewEffect::None
+                }
+                _ => ViewEffect::None,
+            };
+        }
+
+        let filtered = self.filtered_tracks();
+        let len = filtered.len();
+        let selected = filtered.get(self.cursor).copied().cloned();
+        let all_filtered: Vec<Track> = filtered.into_iter().cloned().collect();
+
         match action {
+            Action::StartSearch => {
+                self.filter_active = true;
+                ViewEffect::None
+            }
+            Action::Escape => {
+                if !self.filter_query.is_empty() {
+                    self.filter_query.clear();
+                    self.cursor = 0;
+                }
+                ViewEffect::None
+            }
             Action::MoveDown => {
                 if len > 0 {
                     self.cursor = (self.cursor + 1).min(len - 1);
@@ -84,53 +150,31 @@ impl PlaylistDetailView {
                 ViewEffect::None
             }
             Action::Activate | Action::PlayDirect => {
-                if let Some(ref pl) = self.playlist
-                    && !pl.tracks.is_empty()
-                {
+                if !all_filtered.is_empty() {
                     let start = if matches!(action, Action::PlayDirect) {
                         0
                     } else {
-                        self.cursor.min(pl.tracks.len() - 1)
+                        self.cursor.min(all_filtered.len() - 1)
                     };
                     return ViewEffect::Command(AppCommand::PlayTracks {
-                        tracks: pl.tracks.clone(),
+                        tracks: all_filtered,
                         start_index: start,
                         autoplay: true,
                     });
                 }
                 ViewEffect::None
             }
-            Action::PlayNext => self
-                .playlist
-                .as_ref()
-                .and_then(|p| p.tracks.get(self.cursor))
-                .map(|t| {
-                    ViewEffect::Command(AppCommand::PlayNext {
-                        tracks: vec![t.clone()],
-                    })
-                })
+            Action::PlayNext => selected
+                .map(|t| ViewEffect::Command(AppCommand::PlayNext { tracks: vec![t] }))
                 .unwrap_or(ViewEffect::None),
-            Action::AppendQueue => self
-                .playlist
-                .as_ref()
-                .and_then(|p| p.tracks.get(self.cursor))
-                .map(|t| {
-                    ViewEffect::Command(AppCommand::AppendTracks {
-                        tracks: vec![t.clone()],
-                    })
-                })
+            Action::AppendQueue => selected
+                .map(|t| ViewEffect::Command(AppCommand::AppendTracks { tracks: vec![t] }))
                 .unwrap_or(ViewEffect::None),
-            Action::AddToPlaylist => self
-                .playlist
-                .as_ref()
-                .and_then(|p| p.tracks.get(self.cursor))
-                .map(|t| ViewEffect::AddToPlaylistPicker(t.clone()))
+            Action::AddToPlaylist => selected
+                .map(ViewEffect::AddToPlaylistPicker)
                 .unwrap_or(ViewEffect::None),
-            Action::ToggleLike => self
-                .playlist
-                .as_ref()
-                .and_then(|p| p.tracks.get(self.cursor))
-                .map(|t| ViewEffect::ToggleLike(t.clone()))
+            Action::ToggleLike => selected
+                .map(ViewEffect::ToggleLike)
                 .unwrap_or(ViewEffect::None),
             Action::ToggleSave => {
                 let (title, subtitle, thumb) = match &self.playlist {
@@ -150,15 +194,13 @@ impl PlaylistDetailView {
                     thumb_url: thumb,
                 }
             }
-            Action::StartRadio => self
-                .playlist
-                .as_ref()
-                .and_then(|p| p.tracks.get(self.cursor).or_else(|| p.tracks.first()))
+            Action::StartRadio => selected
+                .or_else(|| all_filtered.first().cloned())
                 .map(|t| {
                     ViewEffect::Command(AppCommand::StartRadio {
                         video_id: Some(t.video_id.clone()),
                         playlist_id: None,
-                        seed_track: Some(t.clone()),
+                        seed_track: Some(t),
                     })
                 })
                 .unwrap_or(ViewEffect::None),
@@ -200,11 +242,13 @@ impl PlaylistDetailView {
         let cov_inner = cov_block.inner(hero_cols[0]);
         frame.render_widget(cov_block, hero_cols[0]);
         let cover_url = self.playlist.as_ref().and_then(|p| p.summary.cover_url());
+        let cover_loading =
+            self.loading || cover_url.as_deref().is_some_and(|u| !covers.has_image(u));
         covers.render_cover(
             frame,
             cov_inner,
             cover_url.as_deref(),
-            self.loading,
+            cover_loading,
             ctx.icons.playlist,
             ctx.spinner,
         );
@@ -252,30 +296,54 @@ impl PlaylistDetailView {
             frame.render_widget(Paragraph::new(lines), info_inner);
         }
 
-        let tr_block = panel_block("Tracks", Some("Bksp back"), true);
+        let tr_block = panel_block("Tracks", Some("/ filter · Bksp back"), true);
         let tr_inner = tr_block.inner(parts[1]);
         frame.render_widget(tr_block, parts[1]);
 
+        let (filter_rect, table_rect) = if self.filter_active || !self.filter_query.is_empty() {
+            let split = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(1)])
+                .split(tr_inner);
+            (Some(split[0]), split[1])
+        } else {
+            (None, tr_inner)
+        };
+
+        if let Some(fr) = filter_rect {
+            let line = Line::from(vec![
+                Span::styled("/ ", Style::default().fg(ACCENT).bg(Color::Reset)),
+                Span::styled(
+                    if self.filter_active {
+                        format!("{}█", self.filter_query)
+                    } else {
+                        self.filter_query.clone()
+                    },
+                    Style::default().fg(TEXT).bg(if self.filter_active {
+                        CURSOR_BG
+                    } else {
+                        Color::Reset
+                    }),
+                ),
+            ]);
+            frame.render_widget(Paragraph::new(line), fr);
+        }
+
         let playing_vid = ctx.snapshot.track.as_ref().map(|t| t.video_id.as_str());
-        let rows: Vec<TableRow> = self
-            .playlist
-            .as_ref()
-            .map(|pl| {
-                pl.tracks
-                    .iter()
-                    .enumerate()
-                    .map(|(i, t)| {
-                        let mut r = TableRow::new(vec![
-                            format!("{:>2}. {}", i + 1, t.title),
-                            t.artist_names(),
-                            t.duration_text(),
-                        ]);
-                        r.is_playing = playing_vid == Some(t.video_id.as_str());
-                        r
-                    })
-                    .collect()
+        let filtered = self.filtered_tracks();
+        let rows: Vec<TableRow> = filtered
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let mut r = TableRow::new(vec![
+                    format!("{:>2}. {}", i + 1, t.title),
+                    t.artist_names(),
+                    t.duration_text(),
+                ]);
+                r.is_playing = playing_vid == Some(t.video_id.as_str());
+                r
             })
-            .unwrap_or_default();
+            .collect();
 
         let cols = [
             ColumnDef {
@@ -303,11 +371,15 @@ impl PlaylistDetailView {
                 show_header: true,
                 loading: self.loading,
                 loading_label: "Loading playlist tracks…",
-                empty_text: "Playlist is empty",
+                empty_text: if self.filter_query.is_empty() {
+                    "Playlist is empty"
+                } else {
+                    "No tracks match filter"
+                },
                 icons: ctx.icons,
                 spinner: ctx.spinner,
             },
-            tr_inner,
+            table_rect,
         );
     }
 }

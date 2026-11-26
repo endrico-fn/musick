@@ -147,12 +147,25 @@ pub fn render_modal(
                 )));
             } else {
                 let clamped = (*cursor).min(playlists.len().saturating_sub(1));
-                for (i, pl) in playlists.iter().enumerate() {
+                let visible_h = usize::from(inner.height.saturating_sub(2)).max(1);
+                let scroll_start = if clamped >= visible_h {
+                    clamped + 1 - visible_h
+                } else {
+                    0
+                };
+                let row_w = usize::from(inner.width.saturating_sub(2));
+                for (i, pl) in playlists
+                    .iter()
+                    .enumerate()
+                    .skip(scroll_start)
+                    .take(visible_h)
+                {
                     let sel = i == clamped;
                     let prefix = if sel { "▸ " } else { "  " };
                     let bg = if sel { CURSOR_BG } else { Color::Reset };
+                    let label = format!("{prefix}{} ({} tracks)", pl.title, pl.track_count);
                     lines.push(Line::from(Span::styled(
-                        format!("{prefix}{} ({} tracks)", pl.title, pl.track_count),
+                        trunc_cells(&label, row_w),
                         Style::default().fg(if sel { ACCENT } else { TEXT }).bg(bg),
                     )));
                 }
@@ -338,7 +351,10 @@ pub fn render_modal(
                     "S (Shift+S)",
                     "Sync playlists & library with YouTube Music now",
                 ),
-                ("/", "Search (Home) or inline filter (Playlists / Library)"),
+                (
+                    "/",
+                    "Search (Home) or inline filter (Playlists / PlaylistDetail / Library)",
+                ),
                 ("Space / n / b", "Play-Pause / Next track / Previous track"),
                 ("> <  or  ] [", "Seek +5s / -5s"),
                 ("+ -", "Volume +5% / -5% (0-130% with lookahead limiter)"),
@@ -366,9 +382,11 @@ pub fn render_modal(
                 ("yy / Backspace / q", "Copy YTM URL / Go Back / Clean Quit"),
             ];
 
+            let max_scroll = entries.len().saturating_sub(usize::from(inner.height));
+            let clamped_scroll = (*scroll).min(max_scroll);
             let lines: Vec<Line<'_>> = entries
                 .iter()
-                .skip(*scroll)
+                .skip(clamped_scroll)
                 .map(|&(k, desc)| {
                     Line::from(vec![
                         Span::styled(

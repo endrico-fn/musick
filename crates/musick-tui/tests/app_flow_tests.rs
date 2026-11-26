@@ -550,6 +550,7 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
         tracks: vec![sample_track("s1", "One More Time")],
         description: None,
         duration_text: Some("60 min".into()),
+        audio_playlist_id: None,
     });
     app.nav_stack.push(NavPage::Album(alb_view));
     narrow.draw(|f| app.render(f)).unwrap();
@@ -611,6 +612,175 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
         panic!("expected BrowserAuthImport modal");
     }
     app.modal = None;
+
+    // 5. Regression: QueueView reorder updates app.queue_snap immediately even when length/index unchanged!
+    engine_handle
+        .send(AppCommand::PlayTracks {
+            tracks: vec![
+                sample_track("q1", "First"),
+                sample_track("q2", "Second"),
+                sample_track("q3", "Third"),
+            ],
+            start_index: 0,
+            autoplay: false,
+        })
+        .await;
+    for _ in 0..20 {
+        app.poll_engine_and_bg();
+        if app.queue_snap.tracks.len() == 3 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    }
+    assert_eq!(app.queue_snap.tracks[1].video_id, "q2");
+    app.dispatch_action(Action::SwitchTab(3)); // Queue tab
+    app.queue.cursor = 1;
+    app.dispatch_action(Action::MoveItemDown); // J: swap index 1 and 2
+    for _ in 0..20 {
+        app.poll_engine_and_bg();
+        if app.queue_snap.tracks[1].video_id == "q3" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    }
+    assert_eq!(app.queue_snap.tracks[1].video_id, "q3");
+    assert_eq!(app.queue_snap.tracks[2].video_id, "q2");
+
+    // 6. Regression: Volume `+` & Translation `t` persist across unrelated Settings changes (never snap back!)
+    app.dispatch_action(Action::VolumeUp);
+    app.dispatch_action(Action::VolumeUp);
+    app.dispatch_action(Action::ToggleTranslation);
+    for _ in 0..20 {
+        app.poll_engine_and_bg();
+        if app.snapshot.volume == 90 && app.snapshot.show_translation {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+    }
+    assert_eq!(app.settings.player.volume, 90);
+    assert!(app.settings.lyrics.translate_to_id);
+
+    // Change unrelated setting (IconMode at row 13) + verify `h` cycles backward on AudioQuality (row 20)
+    // and `h` does NOT trigger action buttons like AuthOAuth (row 0) or ClearHistory (row 7)!
+    app.dispatch_action(Action::SwitchTab(4)); // Settings
+    app.settings_view.cursor = 0; // AuthOAuth
+    app.dispatch_action(Action::MoveLeft);
+    assert!(app.modal.is_none()); // h must NOT open OAuth wizard!
+    app.settings_view.cursor = 13; // IconMode
+    app.dispatch_action(Action::Activate);
+    app.settings_view.cursor = 20; // AudioQuality (Best -> MoveLeft -> Saver)
+    app.dispatch_action(Action::MoveLeft);
+    assert_eq!(
+        app.settings.player.audio_quality,
+        musick_core::AudioQuality::Saver
+    );
+    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    app.poll_engine_and_bg();
+    assert_eq!(app.snapshot.volume, 90); // NEVER snapped back to 80!
+    assert!(app.snapshot.show_translation); // NEVER reset to false!
+
+    // 7. Regression: PlaylistDetailView supports inline `/` filter and Esc clears filter before popping!
+    let mut pl_filter = PlaylistDetailView::new("PL_FILT".into(), "Mix".into(), false);
+    pl_filter.set_playlist(Playlist {
+        summary: PlaylistSummary {
+            browse_id: "PL_FILT".into(),
+            title: "Mix".into(),
+            author: Some("Curator".into()),
+            count: Some("2 tracks".into()),
+            thumbs: Vec::new(),
+        },
+        tracks: vec![
+            sample_track("f1", "Midnight City"),
+            sample_track("f2", "Solar Sailer"),
+        ],
+        description: None,
+        views: None,
+        duration_text: None,
+        year: None,
+        total: Some(2),
+    });
+    app.nav_stack.push(NavPage::PlaylistDetail(pl_filter));
+    app.dispatch_action(Action::StartSearch);
+    assert_eq!(app.input_mode(), musick_tui::keymap::InputMode::Insert);
+    app.dispatch_action(Action::InputChar('s'));
+    app.dispatch_action(Action::InputChar('o'));
+    app.dispatch_action(Action::InputChar('l'));
+    app.dispatch_action(Action::InputSubmit);
+    assert_eq!(app.input_mode(), musick_tui::keymap::InputMode::Normal);
+    wide.draw(|f| app.render(f)).unwrap();
+    let filt_buf = buf_str(&wide);
+    assert!(filt_buf.contains("Solar Sailer"));
+    assert!(!filt_buf.contains("Midnight City"));
+    // First Esc clears filter without popping nav_stack; second Esc pops!
+    app.dispatch_action(Action::Escape);
+    assert_eq!(app.nav_stack.len(), 1);
+    app.dispatch_action(Action::Escape);
+    assert!(app.nav_stack.is_empty());
+
+    // 8. Regression: ArtistView never prints duplicate "subscribers subscribers"
+    let mut art_sub = ArtistView::new("UCsub".into(), "Daft Punk".into(), CoverSize::M, false);
+    art_sub.set_artist(Artist {
+        summary: ArtistSummary {
+            browse_id: "UCsub".into(),
+            name: "Daft Punk".into(),
+            subtitle: Some("65M monthly audience".into()),
+            thumbs: Vec::new(),
+        },
+        description: None,
+        listeners: Some("65M monthly audience".into()),
+        songs: vec![sample_track("s1", "One More Time")],
+        albums: Vec::new(),
+        singles: Vec::new(),
+        playlists: Vec::new(),
+        related: Vec::new(),
+        albums_params: None,
+        singles_params: None,
+        radio_id: None,
+        songs_playlist_id: None,
+        videos: Vec::new(),
+        subscribers: Some("7.23M subscribers".into()),
+        views: None,
+        albums_browse_id: None,
+        singles_browse_id: None,
+        videos_playlist_id: None,
+        shuffle_id: None,
+    });
+    app.nav_stack.push(NavPage::Artist(Box::new(art_sub)));
+    wide.draw(|f| app.render(f)).unwrap();
+    let art_buf = buf_str(&wide);
+    assert!(art_buf.contains("7.23M subscribers"));
+    assert!(!art_buf.contains("subscribers subscribers"));
+    app.nav_stack.clear();
+
+    // 9. Regression: Closing OAuthWizard ignores late BgMsg::OAuthPollCompleted!
+    app.modal = None;
+    app.handle_bg_msg(musick_tui::app::BgMsg::OAuthPollCompleted(Ok(
+        musick_core::OAuthPollStatus::Authorized(musick_core::OAuthCredentials {
+            client_id: "cid".into(),
+            client_secret: "csec".into(),
+            access_token: "tok".into(),
+            refresh_token: "ref".into(),
+            expires_at: 9999999999,
+            scope: String::new(),
+            token_type: "Bearer".into(),
+            page_id: None,
+            account_label: None,
+        }),
+    )));
+    assert_eq!(app.settings.privacy.auth_mode, AuthMode::Anonymous);
+
+    // 10. Regression: TrackTable renders thin scrollbar when rows exceed viewport height
+    let many_tracks: Vec<Track> = (0..30)
+        .map(|i| sample_track(&format!("v{i}"), &format!("Long Track Title #{i}")))
+        .collect();
+    app.home.set_home_feed(HomeFeed {
+        mixes: many_tracks,
+        ..HomeFeed::default()
+    });
+    app.dispatch_action(Action::SwitchTab(0));
+    wide.draw(|f| app.render(f)).unwrap();
+    let sb_buf = buf_str(&wide);
+    assert!(sb_buf.contains('┃') || sb_buf.contains('│'));
 
     engine_handle.send(AppCommand::Shutdown).await;
     let _ = engine_join.await;

@@ -200,11 +200,13 @@ impl AlbumView {
         let cov_inner = cov_block.inner(hero_cols[0]);
         frame.render_widget(cov_block, hero_cols[0]);
         let cover_url = self.album.as_ref().and_then(|a| a.summary.cover_url());
+        let cover_loading =
+            self.loading || cover_url.as_deref().is_some_and(|u| !covers.has_image(u));
         covers.render_cover(
             frame,
             cov_inner,
             cover_url.as_deref(),
-            self.loading,
+            cover_loading,
             ctx.icons.album,
             ctx.spinner,
         );

@@ -21,6 +21,7 @@ const MAX_PROTO_CACHE: usize = 64;
 /// Manages terminal graphics protocol detection and bounded stateful image cache.
 pub struct CoverRenderer {
     picker: Picker,
+    detected_protocol: ProtocolType,
     protocols: HashMap<String, StatefulProtocol>,
     order: VecDeque<String>,
 }
@@ -29,25 +30,20 @@ impl CoverRenderer {
     pub fn detect(pref: ImageProtocol) -> Self {
         let mut picker = match pref {
             ImageProtocol::Halfblock => Picker::halfblocks(),
-            ImageProtocol::Auto => {
+            ImageProtocol::Auto | ImageProtocol::Kitty | ImageProtocol::Sixel => {
                 Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
             }
-            ImageProtocol::Kitty => {
-                let mut p = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
-                p.set_protocol_type(ProtocolType::Kitty);
-                p
-            }
-            ImageProtocol::Sixel => {
-                let mut p = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
-                p.set_protocol_type(ProtocolType::Sixel);
-                p
-            }
         };
-        if pref == ImageProtocol::Halfblock {
-            picker.set_protocol_type(ProtocolType::Halfblocks);
+        let detected_protocol = picker.protocol_type();
+        match pref {
+            ImageProtocol::Auto => {}
+            ImageProtocol::Kitty => picker.set_protocol_type(ProtocolType::Kitty),
+            ImageProtocol::Sixel => picker.set_protocol_type(ProtocolType::Sixel),
+            ImageProtocol::Halfblock => picker.set_protocol_type(ProtocolType::Halfblocks),
         }
         Self {
             picker,
+            detected_protocol,
             protocols: HashMap::new(),
             order: VecDeque::new(),
         }
@@ -56,14 +52,15 @@ impl CoverRenderer {
     pub fn halfblocks_for_test() -> Self {
         Self {
             picker: Picker::halfblocks(),
+            detected_protocol: ProtocolType::Halfblocks,
             protocols: HashMap::new(),
             order: VecDeque::new(),
         }
     }
 
-    pub fn set_protocol(&mut self, pref: ImageProtocol) {
+    pub fn set_protocol(&mut self, pref: ImageProtocol) -> bool {
         let proto = match pref {
-            ImageProtocol::Auto => self.picker.protocol_type(),
+            ImageProtocol::Auto => self.detected_protocol,
             ImageProtocol::Kitty => ProtocolType::Kitty,
             ImageProtocol::Sixel => ProtocolType::Sixel,
             ImageProtocol::Halfblock => ProtocolType::Halfblocks,
@@ -72,7 +69,14 @@ impl CoverRenderer {
             self.picker.set_protocol_type(proto);
             self.protocols.clear();
             self.order.clear();
+            return true;
         }
+        false
+    }
+
+    pub fn clear_cache(&mut self) {
+        self.protocols.clear();
+        self.order.clear();
     }
 
     pub fn insert_image(&mut self, url: String, img: Arc<DynamicImage>) {

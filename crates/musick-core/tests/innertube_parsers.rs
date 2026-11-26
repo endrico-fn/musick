@@ -7,12 +7,13 @@ use tempfile::tempdir;
 
 use musick_core::innertube::parsers::{
     extract_plays_from_browse, extract_visitor_data, parse_album, parse_artist, parse_home_feed,
-    parse_playlist, parse_playlist_edit_results, parse_search_results, parse_watch_playlist,
-    parse_yt_lyrics,
+    parse_playlist, parse_playlist_edit_results, parse_search_results, parse_two_row_item,
+    parse_watch_playlist, parse_yt_lyrics,
 };
+use musick_core::innertube::search_filter_params;
 use musick_core::{
     AppPaths, AuthManager, CacheManager, CacheSettings, CatalogApi, ClientKind, InnerTubeClient,
-    MemorySecretStore, PlaybackTelemetryEvent, PlaybackTracking, SearchItem,
+    MemorySecretStore, PlaybackTelemetryEvent, PlaybackTracking, SearchCategory, SearchItem,
 };
 
 fn load_fixture(name: &str) -> Value {
@@ -201,4 +202,138 @@ async fn context_injects_visitor_data_and_brand_account_and_gates_telemetry_stri
         )
         .await
         .unwrap();
+
+    // 4. Region updates cleanly via CatalogApi trait
+    let api: Arc<dyn CatalogApi> = Arc::new(client);
+    api.set_region("US");
+}
+
+#[test]
+fn parses_live_youtube_music_shapes_for_thumbnails_radio_album_playlist_and_search_params() {
+    // 1. musicTwoRowItemRenderer uses `thumbnailRenderer.musicThumbnailRenderer.thumbnail.thumbnails`
+    let two_row = json!({
+        "title": { "runs": [{ "text": "Mustahil" }] },
+        "subtitle": { "runs": [{ "text": "Single" }, { "text": " • " }, { "text": "Robi DA7" }] },
+        "navigationEndpoint": {
+            "browseEndpoint": {
+                "browseId": "MPREb_z43rR5FKyfe",
+                "browseEndpointContextSupportedConfigs": {
+                    "browseEndpointContextMusicConfig": { "pageType": "MUSIC_PAGE_TYPE_ALBUM" }
+                }
+            }
+        },
+        "thumbnailRenderer": {
+            "musicThumbnailRenderer": {
+                "thumbnail": {
+                    "thumbnails": [
+                        { "url": "https://yt3.googleusercontent.com/abc=w226-h226-l90-rj", "width": 226, "height": 226 },
+                        { "url": "https://yt3.googleusercontent.com/abc=w544-h544-l90-rj", "width": 544, "height": 544 }
+                    ]
+                }
+            }
+        }
+    });
+    match parse_two_row_item(&two_row).unwrap() {
+        SearchItem::Album(al) => {
+            assert_eq!(al.browse_id, "MPREb_z43rR5FKyfe");
+            assert_eq!(al.thumbs.len(), 2);
+            assert!(al.cover_url().unwrap().contains("w300-h300"));
+        }
+        other => panic!("Expected Album, got {other:?}"),
+    }
+
+    // 2. Live artist header uses `watchEndpoint.playlistId` on startRadioButton & playButton
+    let artist_live = json!({
+        "header": {
+            "musicImmersiveHeaderRenderer": {
+                "title": { "runs": [{ "text": "Daft Punk" }] },
+                "startRadioButton": {
+                    "buttonRenderer": {
+                        "navigationEndpoint": {
+                            "watchEndpoint": { "playlistId": "RDEM_LIVE_RADIO", "videoId": "v1" }
+                        }
+                    }
+                },
+                "playButton": {
+                    "buttonRenderer": {
+                        "navigationEndpoint": {
+                            "watchEndpoint": { "playlistId": "RDAO_LIVE_SHUFFLE", "videoId": "v2" }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    let artist = parse_artist("UCRr1", &artist_live);
+    assert_eq!(artist.radio_id.as_deref(), Some("RDEM_LIVE_RADIO"));
+    assert_eq!(artist.shuffle_id.as_deref(), Some("RDAO_LIVE_SHUFFLE"));
+
+    // 3. Live album header exposes `OLAK5uy_...` audioPlaylistId for `like/like` library saving
+    let album_live = json!({
+        "contents": {
+            "twoColumnBrowseResultsRenderer": {
+                "tabs": [{
+                    "tabRenderer": {
+                        "content": {
+                            "sectionListRenderer": {
+                                "contents": [{
+                                    "musicResponsiveHeaderRenderer": {
+                                        "title": { "runs": [{ "text": "Random Access Memories" }] },
+                                        "buttons": [{
+                                            "musicPlayButtonRenderer": {
+                                                "playNavigationEndpoint": {
+                                                    "watchPlaylistEndpoint": { "playlistId": "OLAK5uy_real_album_pid" }
+                                                }
+                                            }
+                                        }]
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        }
+    });
+    let alb = parse_album("MPREb_RAM", &album_live);
+    assert_eq!(
+        alb.audio_playlist_id.as_deref(),
+        Some("OLAK5uy_real_album_pid")
+    );
+
+    // 4. Live playlist header stores author in `facepile.avatarStackViewModel.text.content`
+    let playlist_live = json!({
+        "contents": {
+            "twoColumnBrowseResultsRenderer": {
+                "tabs": [{
+                    "tabRenderer": {
+                        "content": {
+                            "sectionListRenderer": {
+                                "contents": [{
+                                    "musicResponsiveHeaderRenderer": {
+                                        "title": { "runs": [{ "text": "Daft Punk on shuffle" }] },
+                                        "subtitle": { "runs": [{ "text": "Playlist" }, { "text": " • " }, { "text": "2023" }] },
+                                        "facepile": {
+                                            "avatarStackViewModel": {
+                                                "text": { "content": "Aleksy Oleksy" }
+                                            }
+                                        }
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        }
+    });
+    let (pl, _) = parse_playlist("PL_LIVE", &playlist_live);
+    assert_eq!(pl.summary.author.as_deref(), Some("Aleksy Oleksy"));
+
+    // 5. Featured Playlists vs Community Playlists use distinct raw base64 params (no `%3D`)
+    let pl_param = search_filter_params(SearchCategory::Playlists).unwrap();
+    let comm_param = search_filter_params(SearchCategory::Community).unwrap();
+    assert_ne!(pl_param, comm_param);
+    assert!(!pl_param.contains("%3D"));
+    assert!(!comm_param.contains("%3D"));
 }

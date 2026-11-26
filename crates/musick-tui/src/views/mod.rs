@@ -59,6 +59,9 @@ pub enum ViewEffect {
     OpenUserPlaylist {
         playlist_id: String,
     },
+    PlayUserPlaylistDirect {
+        playlist_id: String,
+    },
     PlayAlbumDirect {
         browse_id: String,
     },

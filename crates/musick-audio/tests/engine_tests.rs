@@ -403,6 +403,95 @@ async fn engine_retries_expired_403_once_autofills_radio_continuation_and_gates_
     let _ = tokio::time::timeout(Duration::from_secs(2), join).await;
 }
 
+#[tokio::test]
+async fn eof_with_autoplay_autofills_and_advances_and_properties_do_not_resurrect_errored_playback()
+{
+    let dir = tempdir().unwrap();
+    let paths = AppPaths::from_roots(
+        dir.path().join("cfg"),
+        dir.path().join("data"),
+        dir.path().join("cache"),
+        dir.path().join("rt"),
+    );
+    let store = Arc::new(UserStore::open(&paths).unwrap());
+    let cache = Arc::new(CacheManager::open(&paths, CacheSettings::default()).unwrap());
+    let auth = Arc::new(AuthManager::new_anonymous(
+        Arc::new(MemorySecretStore::new()),
+        musick_core::build_http_client(),
+    ));
+    let catalog = Arc::new(MockEngineCatalog::default());
+    let backend = Arc::new(MockAudioBackend::new());
+    let resolver = Arc::new(HybridStreamResolver::with_backends(
+        None,
+        Arc::new(CountingStreamBackend::new()),
+        AudioQuality::Best,
+        Arc::new(|| 1000.0),
+    ));
+
+    let mut settings = Settings::default();
+    settings.lyrics.enabled = false;
+    let lyrics = Arc::new(
+        LyricsService::new(
+            Some(catalog.clone()),
+            cache,
+            musick_core::build_http_client(),
+            settings.clone(),
+        )
+        .with_ytdlp_captions(false),
+    );
+
+    let (handle, join) = PlayerEngine::spawn(PlayerEngineDeps {
+        backend: backend.clone(),
+        resolver,
+        catalog,
+        lyrics,
+        store,
+        auth,
+        settings,
+    });
+
+    // 1. Play 1 track with autoplay=true -> autofills radio and advances cleanly on EOF
+    handle
+        .send(AppCommand::PlayTracks {
+            tracks: vec![Track::minimal("solo1", "Solo Track")],
+            start_index: 0,
+            autoplay: true,
+        })
+        .await;
+    for _ in 0..30 {
+        if handle.queue().tracks.len() >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(handle.queue().tracks.len() >= 3);
+
+    // 2. Simulate fatal error on track (two failures so retry exhausts), then emit BackendEvent::Properties
+    backend.emit(BackendEvent::FileError("Fatal 1".into()));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    backend.emit(BackendEvent::FileError("Fatal 2".into()));
+    for _ in 0..30 {
+        if handle.snapshot().error.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!handle.snapshot().playing);
+
+    // A late Properties event with paused=false MUST NOT flip playing back to true while errored!
+    backend.emit(BackendEvent::Properties(AudioProperties {
+        paused: false,
+        volume: 85,
+        ..AudioProperties::default()
+    }));
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    assert!(!handle.snapshot().playing);
+    assert_eq!(handle.snapshot().volume, 85);
+
+    handle.send(AppCommand::Shutdown).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), join).await;
+}
+
 #[test]
 fn cava_config_and_frame_parsing_work_cleanly() {
     let cfg = build_cava_config(

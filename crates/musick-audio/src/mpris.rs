@@ -1,5 +1,8 @@
 #[cfg(target_os = "linux")]
 mod linux_impl {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use mpris_server::{
         LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property,
         RootInterface, Server, Time, TrackId, Volume, zbus::fdo,
@@ -13,6 +16,7 @@ mod linux_impl {
 
     struct MusickMpris {
         engine: PlayerEngineHandle,
+        quit_flag: Option<Arc<AtomicBool>>,
     }
 
     fn build_metadata(snap: &PlaybackSnapshot) -> Metadata {
@@ -71,7 +75,11 @@ mod linux_impl {
         }
 
         async fn quit(&self) -> fdo::Result<()> {
-            self.engine.send(AppCommand::Shutdown).await;
+            if let Some(ref flag) = self.quit_flag {
+                flag.store(true, Ordering::SeqCst);
+            } else {
+                self.engine.send(AppCommand::Shutdown).await;
+            }
             Ok(())
         }
 
@@ -280,12 +288,24 @@ mod linux_impl {
 
     impl MprisService {
         pub fn spawn(engine: PlayerEngineHandle) -> Self {
+            Self::spawn_inner(engine, None)
+        }
+
+        pub fn spawn_with_quit_flag(
+            engine: PlayerEngineHandle,
+            quit_flag: Arc<AtomicBool>,
+        ) -> Self {
+            Self::spawn_inner(engine, Some(quit_flag))
+        }
+
+        fn spawn_inner(engine: PlayerEngineHandle, quit_flag: Option<Arc<AtomicBool>>) -> Self {
             let task = tokio::spawn(async move {
                 let suffix = format!("musick.instance{}", std::process::id());
                 let server = match Server::new(
                     &suffix,
                     MusickMpris {
                         engine: engine.clone(),
+                        quit_flag,
                     },
                 )
                 .await
@@ -344,6 +364,13 @@ pub struct MprisService;
 #[cfg(not(target_os = "linux"))]
 impl MprisService {
     pub fn spawn(_engine: crate::engine::PlayerEngineHandle) -> Self {
+        Self
+    }
+
+    pub fn spawn_with_quit_flag(
+        _engine: crate::engine::PlayerEngineHandle,
+        _quit_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
         Self
     }
 

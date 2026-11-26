@@ -305,6 +305,13 @@ impl ActiveCava {
     }
 }
 
+impl Drop for ActiveCava {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+        let _ = std::fs::remove_file(&self.conf_path);
+    }
+}
+
 async fn run_cava_task(
     mut ctrl: CavaControl,
     mut ctrl_rx: mpsc::UnboundedReceiver<CavaMsg>,

@@ -128,3 +128,35 @@ async fn circuit_breaker_fallback_single_flight_and_quality_cache_invalidation()
     let s4_saver = resolver.resolve("vid4").await.unwrap();
     assert_eq!(s4_saver.quality_label(), "opus 131k saver");
 }
+
+#[tokio::test]
+async fn single_flight_recovers_cleanly_when_leader_is_cancelled_without_deadlock() {
+    let slow = Arc::new(MockBackend::new("ytdlp", false, 80));
+    let resolver = Arc::new(HybridStreamResolver::with_backends(
+        None,
+        slow.clone(),
+        AudioQuality::Best,
+        Arc::new(|| 10_000.0),
+    ));
+
+    // Spawn leader, then spawn a waiter, then abort the leader mid-flight!
+    let r1 = resolver.clone();
+    let leader = tokio::spawn(async move { r1.resolve("vid_cancel").await });
+    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+
+    let r2 = resolver.clone();
+    let waiter = tokio::spawn(async move { r2.resolve("vid_cancel").await });
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+    leader.abort();
+    let _ = leader.await;
+
+    // Waiter MUST recover by becoming the new leader and completing within timeout (never deadlocks!).
+    let res = tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+        .await
+        .expect("Waiter deadlocked after leader cancellation!")
+        .unwrap()
+        .unwrap();
+    assert_eq!(res.video_id, "vid_cancel");
+    assert!(res.url.contains("id=vid_cancel"));
+}

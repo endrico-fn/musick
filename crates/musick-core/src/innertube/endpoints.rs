@@ -26,8 +26,8 @@ pub fn search_filter_params(category: SearchCategory) -> Option<&'static str> {
         SearchCategory::Videos => Some("EgWKAQIQAWoMEAMQBBAJEAoQBRAV"),
         SearchCategory::Albums => Some("EgWKAQIYAWoMEAMQBBAJEAoQBRAV"),
         SearchCategory::Artists => Some("EgWKAQIgAWoMEAMQBBAJEAoQBRAV"),
-        SearchCategory::Playlists => Some("EgWKAQIoAWoMEAMQBBAJEAoQBRAV"),
-        SearchCategory::Community => Some("EgeKAQQoAEABagwQAxAEEAkQChAFEBU%3D"),
+        SearchCategory::Playlists => Some("EgeKAQQoADgBagwQAxAEEAkQChAFEBU="),
+        SearchCategory::Community => Some("EgeKAQQoAEABagwQAxAEEAkQChAFEBU="),
     }
 }
 

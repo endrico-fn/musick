@@ -71,8 +71,30 @@ pub fn extract_thumbs(val: &Value) -> Vec<Thumb> {
             get_array(
                 val,
                 &[
+                    "thumbnailRenderer",
+                    "musicThumbnailRenderer",
+                    "thumbnail",
+                    "thumbnails",
+                ],
+            )
+        })
+        .or_else(|| {
+            get_array(
+                val,
+                &[
                     "thumbnail",
                     "musicThumbnailRenderer",
+                    "thumbnail",
+                    "thumbnails",
+                ],
+            )
+        })
+        .or_else(|| {
+            get_array(
+                val,
+                &[
+                    "thumbnailRenderer",
+                    "croppedSquareThumbnailRenderer",
                     "thumbnail",
                     "thumbnails",
                 ],

@@ -1,5 +1,6 @@
 use std::io::{self, Read};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -10,6 +11,7 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use tokio::sync::{Notify, mpsc};
 
 use musick_audio::{
     CavaControl, CavaRunner, HybridStreamResolver, MprisService, MpvIpcBackend, PlayerEngine,
@@ -282,8 +284,15 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
         settings: settings.clone(),
     });
 
+    // SIGINT / SIGTERM / MPRIS graceful shutdown coordination
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+    let shutdown_notify = Arc::new(Notify::new());
+
     let mpris = if settings.player.mpris_enabled {
-        Some(MprisService::spawn(engine_handle.clone()))
+        Some(MprisService::spawn_with_quit_flag(
+            engine_handle.clone(),
+            shutdown_flag.clone(),
+        ))
     } else {
         None
     };
@@ -337,6 +346,7 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
         settings,
         covers,
     );
+    app.attach_mpris(mpris, shutdown_flag.clone());
 
     // Background Opt-In Sync Worker (default 5 minutes; strict no-op when Anonymous)
     let sync_bg_tx = app.bg_sender();
@@ -357,9 +367,8 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
 
     app.kick_startup_loads();
 
-    // SIGINT / SIGTERM graceful shutdown flag
-    let shutdown_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let sig_flag = shutdown_flag.clone();
+    let sig_notify = shutdown_notify.clone();
     let sig_task = tokio::spawn(async move {
         #[cfg(unix)]
         {
@@ -375,58 +384,120 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
                     }
                 } => {}
             }
-            sig_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            sig_flag.store(true, Ordering::SeqCst);
+            sig_notify.notify_waiters();
         }
         #[cfg(not(unix))]
         {
             let _ = tokio::signal::ctrl_c().await;
-            sig_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            sig_flag.store(true, Ordering::SeqCst);
+            sig_notify.notify_waiters();
         }
     });
 
-    // Adaptive Event Loop: 80ms active (spinner / cava / loading), 250ms idle
+    // Dedicated terminal input reader thread so Tokio select! wakes at 0ms latency
+    // on keypresses, background results, engine/cava updates, or OS signals.
+    let input_stop = Arc::new(AtomicBool::new(false));
+    let input_stop_clone = input_stop.clone();
+    let (input_tx, mut input_rx) = mpsc::channel::<Event>(64);
+    let input_thread = std::thread::spawn(move || {
+        while !input_stop_clone.load(Ordering::Relaxed) {
+            match event::poll(Duration::from_millis(50)) {
+                Ok(true) => match event::read() {
+                    Ok(ev) => {
+                        if input_tx.blocking_send(ev).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                },
+                Ok(false) => {}
+                Err(_) => break,
+            }
+        }
+    });
+
+    let mut snap_rx = engine_handle.snapshot_rx.clone();
+    let mut pos_rx = engine_handle.pos_rx.clone();
+    let mut queue_rx = engine_handle.queue_rx.clone();
+    let mut lyrics_rx = engine_handle.lyrics_rx.clone();
+    let mut cava_rx = cava_handle.frame_rx.clone();
+    let mut anim_tick = tokio::time::interval(Duration::from_millis(80));
+    anim_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    // Zero-latency reactive event loop (80ms spinner/cava tick only while active)
     loop {
-        app.on_tick();
+        app.poll_engine_and_bg();
         terminal.draw(|f| app.render(f))?;
 
-        if app.should_quit || shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
+        if app.should_quit || shutdown_flag.load(Ordering::SeqCst) {
             break;
         }
 
-        let poll_timeout = if app.is_animating() {
-            Duration::from_millis(80)
-        } else {
-            Duration::from_millis(250)
-        };
+        let animating = app.is_animating();
+        let idle_sleep = tokio::time::sleep(Duration::from_millis(250));
+        tokio::pin!(idle_sleep);
 
-        if event::poll(poll_timeout)? {
-            match event::read()? {
-                Event::Key(key) => {
-                    if key.kind == crossterm::event::KeyEventKind::Press {
-                        app.handle_key(key);
+        tokio::select! {
+            maybe_ev = input_rx.recv() => {
+                if let Some(ev) = maybe_ev {
+                    handle_term_event(&mut app, ev);
+                    while let Ok(ev2) = input_rx.try_recv() {
+                        handle_term_event(&mut app, ev2);
                     }
+                } else {
+                    break;
                 }
-                Event::Paste(pasted) => {
-                    app.handle_paste(&pasted);
+            }
+            maybe_bg = app.recv_bg() => {
+                if let Some(msg) = maybe_bg {
+                    app.handle_bg_msg(msg);
                 }
-                Event::Resize(_, _) => {}
-                _ => {}
+            }
+            _ = snap_rx.changed() => {}
+            _ = pos_rx.changed() => {}
+            _ = queue_rx.changed() => {}
+            _ = lyrics_rx.changed() => {}
+            _ = cava_rx.changed(), if animating => {}
+            _ = anim_tick.tick(), if animating => {
+                app.on_tick();
+            }
+            _ = &mut idle_sleep, if !animating => {
+                app.on_tick();
+            }
+            _ = shutdown_notify.notified() => {
+                break;
             }
         }
     }
 
-    // Clean teardown: restore terminal, stop mpv, stop cava, stop MPRIS & workers
+    // Clean teardown: stop input thread, restore terminal, stop mpv, stop cava, stop MPRIS & workers
+    input_stop.store(true, Ordering::SeqCst);
+    let _ = input_thread.join();
     restore_terminal();
     sig_task.abort();
     janitor_task.abort();
     sync_task.abort();
-    if let Some(m) = mpris {
-        m.shutdown();
-    }
+    app.shutdown_mpris();
     cava_handle.shutdown();
     engine_handle.send(AppCommand::Shutdown).await;
     let _ = tokio::time::timeout(Duration::from_secs(2), engine_join).await;
     let _ = tokio::time::timeout(Duration::from_secs(1), cava_join).await;
 
     Ok(())
+}
+
+fn handle_term_event(app: &mut App, ev: Event) {
+    match ev {
+        Event::Key(key) => {
+            if key.kind == crossterm::event::KeyEventKind::Press {
+                app.handle_key(key);
+            }
+        }
+        Event::Paste(pasted) => {
+            app.handle_paste(&pasted);
+        }
+        Event::Resize(_, _) => {}
+        _ => {}
+    }
 }

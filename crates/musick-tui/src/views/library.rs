@@ -293,6 +293,10 @@ impl LibraryView {
                     })
                 })
                 .unwrap_or(ViewEffect::None),
+            Action::CopyUrl => self
+                .selected_url()
+                .map(ViewEffect::CopyUrl)
+                .unwrap_or(ViewEffect::None),
             _ => ViewEffect::None,
         }
     }
@@ -420,7 +424,40 @@ impl LibraryView {
                     browse_id: c.browse_id,
                 })
                 .unwrap_or(ViewEffect::None),
-            LibraryTab::UserPlaylists => self.activate_selected(),
+            LibraryTab::UserPlaylists => {
+                let q = self.filter_query.trim().to_lowercase();
+                self.user_playlists
+                    .iter()
+                    .filter(|p| q.is_empty() || p.title.to_lowercase().contains(&q))
+                    .nth(self.cursor)
+                    .map(|pl| ViewEffect::PlayUserPlaylistDirect {
+                        playlist_id: pl.id.clone(),
+                    })
+                    .unwrap_or(ViewEffect::None)
+            }
+        }
+    }
+
+    fn selected_url(&self) -> Option<String> {
+        let q = self.filter_query.trim().to_lowercase();
+        match self.active_tab {
+            LibraryTab::UserPlaylists => self
+                .user_playlists
+                .iter()
+                .filter(|p| q.is_empty() || p.title.to_lowercase().contains(&q))
+                .nth(self.cursor)
+                .and_then(|pl| pl.remote_id.as_deref())
+                .map(|rid| format!("https://music.youtube.com/playlist?list={rid}")),
+            LibraryTab::LikedSongs | LibraryTab::Recent => self.selected_track().map(|t| t.url()),
+            LibraryTab::SavedAlbums => self
+                .selected_collection()
+                .map(|c| format!("https://music.youtube.com/browse/{}", c.browse_id)),
+            LibraryTab::SavedArtists => self
+                .selected_collection()
+                .map(|c| format!("https://music.youtube.com/channel/{}", c.browse_id)),
+            LibraryTab::SavedPlaylists => self
+                .selected_collection()
+                .map(|c| format!("https://music.youtube.com/playlist?list={}", c.browse_id)),
         }
     }
 

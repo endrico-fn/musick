@@ -136,6 +136,7 @@ pub struct PlayerEngine {
     radio_playlist_id: Option<String>,
     radio_continuation: Option<String>,
     radio_inflight: bool,
+    pending_autofill_advance: bool,
 
     active_tracking: Option<(String, String, PlaybackTracking)>,
     watchtime_reported: bool,
@@ -181,6 +182,7 @@ impl PlayerEngine {
             radio_playlist_id: None,
             radio_continuation: None,
             radio_inflight: false,
+            pending_autofill_advance: false,
             active_tracking: None,
             watchtime_reported: false,
         };
@@ -359,9 +361,11 @@ impl PlayerEngine {
             AppCommand::Next => {
                 self.flush_watchtime_if_needed().await;
                 if let Some(next) = self.queue.advance(true) {
+                    self.pending_autofill_advance = false;
                     self.publish_queue();
                     self.load_track(next, false).await;
-                } else if self.snapshot.autoplay_active {
+                } else if self.snapshot.autoplay_active && self.settings.player.autoplay {
+                    self.pending_autofill_advance = true;
                     self.maybe_autofill_radio().await;
                 }
             }
@@ -526,6 +530,7 @@ impl PlayerEngine {
     async fn load_track(&mut self, track: Track, is_retry: bool) {
         self.load_gen += 1;
         let epoch = self.load_gen;
+        self.pending_autofill_advance = false;
         if !is_retry {
             self.retried_video_id = None;
         }
@@ -617,10 +622,14 @@ impl PlayerEngine {
                 };
                 let _ = self.pos_tx.send(self.position);
 
+                let should_update_play_state =
+                    self.snapshot.error.is_none() && !self.snapshot.resolving;
                 if props.paused != self.snapshot.paused || props.volume != self.snapshot.volume {
                     self.snapshot.paused = props.paused;
                     self.snapshot.volume = props.volume;
-                    self.snapshot.playing = !props.paused && self.snapshot.track.is_some();
+                    if should_update_play_state {
+                        self.snapshot.playing = !props.paused && self.snapshot.track.is_some();
+                    }
                     self.publish_snapshot();
                 }
 
@@ -632,6 +641,7 @@ impl PlayerEngine {
             BackendEvent::Eof => {
                 self.flush_watchtime_if_needed().await;
                 if let Some(next) = self.queue.advance(false) {
+                    self.pending_autofill_advance = false;
                     self.publish_queue();
                     let was_gapless =
                         self.gapless_appended_video_id.as_deref() == Some(next.video_id.as_str());
@@ -641,6 +651,11 @@ impl PlayerEngine {
                     } else {
                         self.load_track(next, false).await;
                     }
+                } else if self.snapshot.autoplay_active && self.settings.player.autoplay {
+                    self.pending_autofill_advance = true;
+                    self.snapshot.playing = false;
+                    self.publish_snapshot();
+                    self.maybe_autofill_radio().await;
                 } else {
                     self.snapshot.playing = false;
                     self.publish_snapshot();
@@ -751,7 +766,17 @@ impl PlayerEngine {
                 if !fresh.is_empty() {
                     self.queue.append(fresh);
                     self.publish_queue();
+                    if self.pending_autofill_advance {
+                        self.pending_autofill_advance = false;
+                        if let Some(next) = self.queue.advance(false) {
+                            self.publish_queue();
+                            self.load_track(next, false).await;
+                            return;
+                        }
+                    }
                     self.schedule_prefetch_and_gapless();
+                } else {
+                    self.pending_autofill_advance = false;
                 }
             }
             InternalMsg::TrackingLoaded {

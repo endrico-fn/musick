@@ -144,9 +144,14 @@ impl SettingsView {
                 self.cursor = len - 1;
                 ViewEffect::None
             }
-            Action::Activate | Action::MoveRight | Action::MoveLeft => {
-                let forward = !matches!(action, Action::MoveLeft);
-                self.activate_row(ALL_ROWS[self.cursor], settings, auth_mode, forward)
+            Action::Activate => {
+                self.activate_row(ALL_ROWS[self.cursor], settings, auth_mode, true, true)
+            }
+            Action::MoveRight => {
+                self.activate_row(ALL_ROWS[self.cursor], settings, auth_mode, true, false)
+            }
+            Action::MoveLeft => {
+                self.activate_row(ALL_ROWS[self.cursor], settings, auth_mode, false, false)
             }
             _ => ViewEffect::None,
         }
@@ -158,10 +163,14 @@ impl SettingsView {
         settings: &Settings,
         auth_mode: AuthMode,
         forward: bool,
+        is_enter: bool,
     ) -> ViewEffect {
         let mut next = settings.clone();
         match row {
             SettingRow::AuthOAuth => {
+                if !is_enter {
+                    return ViewEffect::None;
+                }
                 return ViewEffect::OpenModal(ActiveModal::OAuthWizard {
                     client_id: std::env::var("MUSICK_OAUTH_CLIENT_ID").unwrap_or_default(),
                     client_secret: std::env::var("MUSICK_OAUTH_CLIENT_SECRET").unwrap_or_default(),
@@ -174,6 +183,9 @@ impl SettingsView {
                 });
             }
             SettingRow::AuthBrowser => {
+                if !is_enter {
+                    return ViewEffect::None;
+                }
                 return ViewEffect::OpenModal(ActiveModal::BrowserAuthImport {
                     raw_headers: String::new(),
                     page_id: String::new(),
@@ -181,8 +193,17 @@ impl SettingsView {
                     error: None,
                 });
             }
-            SettingRow::SyncNow => return ViewEffect::SyncNow,
+            SettingRow::SyncNow => {
+                return if is_enter {
+                    ViewEffect::SyncNow
+                } else {
+                    ViewEffect::None
+                };
+            }
             SettingRow::Logout => {
+                if !is_enter {
+                    return ViewEffect::None;
+                }
                 if !auth_mode.is_authenticated() {
                     return ViewEffect::StatusToast(
                         "Already in Anonymous (no cookies) mode".into(),
@@ -212,12 +233,27 @@ impl SettingsView {
             SettingRow::RemoteSuggestions => {
                 next.privacy.remote_suggestions = !next.privacy.remote_suggestions;
             }
-            SettingRow::ClearHistory => return ViewEffect::ClearHistory,
+            SettingRow::ClearHistory => {
+                return if is_enter {
+                    ViewEffect::ClearHistory
+                } else {
+                    ViewEffect::None
+                };
+            }
             SettingRow::CacheEnabled => {
                 next.cache.enabled = !next.cache.enabled;
             }
-            SettingRow::PruneCache => return ViewEffect::PruneCache,
+            SettingRow::PruneCache => {
+                return if is_enter {
+                    ViewEffect::PruneCache
+                } else {
+                    ViewEffect::None
+                };
+            }
             SettingRow::ClearCache => {
+                if !is_enter {
+                    return ViewEffect::None;
+                }
                 return ViewEffect::OpenModal(ActiveModal::Confirm {
                     title: "Clear Cache".to_string(),
                     message:
@@ -239,7 +275,15 @@ impl SettingsView {
                 next.display.region = VALID_REGIONS[next_idx].to_string();
             }
             SettingRow::CoverSize => {
-                next.display.cover_size = next.display.cover_size.cycle();
+                next.display.cover_size = if forward {
+                    next.display.cover_size.cycle()
+                } else {
+                    match next.display.cover_size {
+                        musick_core::CoverSize::S => musick_core::CoverSize::L,
+                        musick_core::CoverSize::M => musick_core::CoverSize::S,
+                        musick_core::CoverSize::L => musick_core::CoverSize::M,
+                    }
+                };
             }
             SettingRow::IconMode => {
                 next.display.icons = match next.display.icons {
@@ -248,11 +292,19 @@ impl SettingsView {
                 };
             }
             SettingRow::ImageProtocol => {
-                next.display.image_protocol = match next.display.image_protocol {
-                    ImageProtocol::Auto => ImageProtocol::Kitty,
-                    ImageProtocol::Kitty => ImageProtocol::Sixel,
-                    ImageProtocol::Sixel => ImageProtocol::Halfblock,
-                    ImageProtocol::Halfblock => ImageProtocol::Auto,
+                next.display.image_protocol = match (next.display.image_protocol, forward) {
+                    (ImageProtocol::Auto, true) | (ImageProtocol::Sixel, false) => {
+                        ImageProtocol::Kitty
+                    }
+                    (ImageProtocol::Kitty, true) | (ImageProtocol::Halfblock, false) => {
+                        ImageProtocol::Sixel
+                    }
+                    (ImageProtocol::Sixel, true) | (ImageProtocol::Auto, false) => {
+                        ImageProtocol::Halfblock
+                    }
+                    (ImageProtocol::Halfblock, true) | (ImageProtocol::Kitty, false) => {
+                        ImageProtocol::Auto
+                    }
                 };
             }
             SettingRow::ReducedMotion => {
@@ -262,33 +314,61 @@ impl SettingsView {
                 next.display.cava_enabled = !next.display.cava_enabled;
             }
             SettingRow::CavaPalette => {
-                next.display.cava_palette = match next.display.cava_palette {
-                    CavaPalette::Teal => CavaPalette::Emerald,
-                    CavaPalette::Emerald => CavaPalette::Aurora,
-                    CavaPalette::Aurora => CavaPalette::Sunset,
-                    CavaPalette::Sunset => CavaPalette::Mono,
-                    CavaPalette::Mono => CavaPalette::Teal,
+                const PALS: &[CavaPalette] = &[
+                    CavaPalette::Teal,
+                    CavaPalette::Emerald,
+                    CavaPalette::Aurora,
+                    CavaPalette::Sunset,
+                    CavaPalette::Mono,
+                ];
+                let idx = PALS
+                    .iter()
+                    .position(|p| *p == next.display.cava_palette)
+                    .unwrap_or(0);
+                let next_idx = if forward {
+                    (idx + 1) % PALS.len()
+                } else {
+                    (idx + PALS.len() - 1) % PALS.len()
                 };
+                next.display.cava_palette = PALS[next_idx];
             }
             SettingRow::CavaSmoothing => {
-                next.display.cava_smoothing = match next.display.cava_smoothing {
-                    CavaSmoothing::Smooth => CavaSmoothing::Balanced,
-                    CavaSmoothing::Balanced => CavaSmoothing::Crisp,
-                    CavaSmoothing::Crisp => CavaSmoothing::Smooth,
+                next.display.cava_smoothing = match (next.display.cava_smoothing, forward) {
+                    (CavaSmoothing::Smooth, true) | (CavaSmoothing::Crisp, false) => {
+                        CavaSmoothing::Balanced
+                    }
+                    (CavaSmoothing::Balanced, true) | (CavaSmoothing::Smooth, false) => {
+                        CavaSmoothing::Crisp
+                    }
+                    (CavaSmoothing::Crisp, true) | (CavaSmoothing::Balanced, false) => {
+                        CavaSmoothing::Smooth
+                    }
                 };
             }
             SettingRow::CavaAudioSource => {
-                next.display.cava_audio_source = match next.display.cava_audio_source {
-                    CavaAudioSource::Auto => CavaAudioSource::Monitor,
-                    CavaAudioSource::Monitor => CavaAudioSource::Off,
-                    CavaAudioSource::Off => CavaAudioSource::Auto,
+                next.display.cava_audio_source = match (next.display.cava_audio_source, forward) {
+                    (CavaAudioSource::Auto, true) | (CavaAudioSource::Off, false) => {
+                        CavaAudioSource::Monitor
+                    }
+                    (CavaAudioSource::Monitor, true) | (CavaAudioSource::Auto, false) => {
+                        CavaAudioSource::Off
+                    }
+                    (CavaAudioSource::Off, true) | (CavaAudioSource::Monitor, false) => {
+                        CavaAudioSource::Auto
+                    }
                 };
             }
             SettingRow::AudioQuality => {
-                next.player.audio_quality = match next.player.audio_quality {
-                    AudioQuality::Best => AudioQuality::Balanced,
-                    AudioQuality::Balanced => AudioQuality::Saver,
-                    AudioQuality::Saver => AudioQuality::Best,
+                next.player.audio_quality = match (next.player.audio_quality, forward) {
+                    (AudioQuality::Best, true) | (AudioQuality::Saver, false) => {
+                        AudioQuality::Balanced
+                    }
+                    (AudioQuality::Balanced, true) | (AudioQuality::Best, false) => {
+                        AudioQuality::Saver
+                    }
+                    (AudioQuality::Saver, true) | (AudioQuality::Balanced, false) => {
+                        AudioQuality::Best
+                    }
                 };
             }
             SettingRow::NormalizeAudio => {
@@ -316,10 +396,16 @@ impl SettingsView {
                 next.lyrics.synced_only = !next.lyrics.synced_only;
             }
             SettingRow::LyricsSource => {
-                next.lyrics.source = match next.lyrics.source {
-                    LyricsSource::Auto => LyricsSource::Youtube,
-                    LyricsSource::Youtube => LyricsSource::Lrclib,
-                    LyricsSource::Lrclib => LyricsSource::Auto,
+                next.lyrics.source = match (next.lyrics.source, forward) {
+                    (LyricsSource::Auto, true) | (LyricsSource::Lrclib, false) => {
+                        LyricsSource::Youtube
+                    }
+                    (LyricsSource::Youtube, true) | (LyricsSource::Auto, false) => {
+                        LyricsSource::Lrclib
+                    }
+                    (LyricsSource::Lrclib, true) | (LyricsSource::Youtube, false) => {
+                        LyricsSource::Auto
+                    }
                 };
             }
             SettingRow::LyricsTranslateId => {

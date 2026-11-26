@@ -24,6 +24,7 @@ pub use endpoints::{
 
 #[async_trait]
 pub trait CatalogApi: Send + Sync {
+    fn set_region(&self, _region: &str) {}
     async fn home_feed(&self, region: &str) -> CoreResult<HomeFeed>;
     async fn search(
         &self,
@@ -231,6 +232,10 @@ impl InnerTubeClient {
 
 #[async_trait]
 impl CatalogApi for InnerTubeClient {
+    fn set_region(&self, region: &str) {
+        InnerTubeClient::set_region(self, region);
+    }
+
     async fn home_feed(&self, region: &str) -> CoreResult<HomeFeed> {
         let cache_key = format!("home:{region}:{}", self.auth.account_key());
         if let Some(cached) = self.cache.get_catalog::<HomeFeed>(&cache_key) {
@@ -923,8 +928,19 @@ impl CatalogApi for InnerTubeClient {
 
     async fn set_album_library_status(&self, browse_id: &str, save: bool) -> CoreResult<()> {
         self.require_auth("set_album_library_status")?;
+        // YouTube Music `like/like` requires the album's audioPlaylistId (`OLAK5uy_...`), not `MPREb_...`.
+        let playlist_id = if browse_id.starts_with("MPRE") {
+            match self.album(browse_id).await {
+                Ok(alb) => alb
+                    .audio_playlist_id
+                    .unwrap_or_else(|| browse_id.to_string()),
+                Err(_) => browse_id.to_string(),
+            }
+        } else {
+            browse_id.to_string()
+        };
         let mut map = serde_json::Map::new();
-        map.insert("target".into(), json!({ "playlistId": browse_id }));
+        map.insert("target".into(), json!({ "playlistId": playlist_id }));
         let ep = if save { "like/like" } else { "like/removelike" };
         let _ = self.post_json(ep, ClientKind::WebRemix, None, map).await?;
         Ok(())

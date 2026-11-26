@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::io::Write;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -12,8 +13,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use tokio::sync::mpsc;
+use tokio::task::AbortHandle;
 
-use musick_audio::{CavaControl, CavaFrame, CavaRunnerHandle, PlayerEngineHandle};
+use musick_audio::{CavaControl, CavaFrame, CavaRunnerHandle, MprisService, PlayerEngineHandle};
 use musick_core::{
     Album, AppCommand, AppPaths, Artist, AuthManager, AuthMode, CacheManager, CacheStats,
     CatalogApi, HomeFeed, ImageService, Lyrics, OAuthPollStatus, PlaybackSnapshot, Playlist,
@@ -60,7 +62,12 @@ pub enum BgMsg {
         url: String,
         image: Arc<DynamicImage>,
     },
+    ImageFailed {
+        url: String,
+    },
     SyncFinished(Result<SyncReport, String>),
+    PlaylistUploaded(Result<String, String>),
+    PlaylistImported(Result<(String, String, usize), String>),
     OAuthCodeStarted(Result<(String, String, String, u64), String>),
     OAuthPollCompleted(Result<OAuthPollStatus, String>),
     Toast(String),
@@ -111,6 +118,9 @@ pub struct App {
     requested_images: HashSet<String>,
     last_cover_url: Option<String>,
     last_selected_playlist_id: Option<String>,
+    oauth_task: Option<AbortHandle>,
+    mpris: Option<MprisService>,
+    mpris_quit_flag: Option<Arc<AtomicBool>>,
 }
 
 impl App {
@@ -152,9 +162,33 @@ impl App {
             requested_images: HashSet::new(),
             last_cover_url: None,
             last_selected_playlist_id: None,
+            oauth_task: None,
+            mpris: None,
+            mpris_quit_flag: None,
         };
         app.reload_local_collections();
         app
+    }
+
+    pub fn attach_mpris(&mut self, mpris: Option<MprisService>, quit_flag: Arc<AtomicBool>) {
+        self.mpris = mpris;
+        self.mpris_quit_flag = Some(quit_flag);
+    }
+
+    pub fn shutdown_mpris(&mut self) {
+        if let Some(m) = self.mpris.take() {
+            m.shutdown();
+        }
+    }
+
+    pub async fn recv_bg(&mut self) -> Option<BgMsg> {
+        self.bg_rx.recv().await
+    }
+
+    fn cancel_oauth_task(&mut self) {
+        if let Some(handle) = self.oauth_task.take() {
+            handle.abort();
+        }
     }
 
     pub fn kick_startup_loads(&mut self) {
@@ -199,8 +233,11 @@ impl App {
         if self.modal.is_some() {
             return InputMode::Modal;
         }
-        if !self.nav_stack.is_empty() {
-            return InputMode::Normal;
+        if let Some(top) = self.nav_stack.last() {
+            return match top {
+                NavPage::PlaylistDetail(v) if v.is_insert_mode() => InputMode::Insert,
+                _ => InputMode::Normal,
+            };
         }
         match self.active_tab {
             0 if self.home.is_insert_mode() => InputMode::Insert,
@@ -229,21 +266,21 @@ impl App {
 
     pub fn poll_engine_and_bg(&mut self) {
         let new_snap = self.services.engine.snapshot();
-        if new_snap.track_rev != self.snapshot.track_rev
-            || new_snap.playing != self.snapshot.playing
-            || new_snap.paused != self.snapshot.paused
-            || new_snap.resolving != self.snapshot.resolving
-            || new_snap.volume != self.snapshot.volume
-            || new_snap.shuffle != self.snapshot.shuffle
-            || new_snap.repeat != self.snapshot.repeat
-            || new_snap.error != self.snapshot.error
-            || new_snap.show_translation != self.snapshot.show_translation
-            || new_snap.translating_lyrics != self.snapshot.translating_lyrics
-            || new_snap.audio_info != self.snapshot.audio_info
-            || new_snap.upcoming_count != self.snapshot.upcoming_count
-        {
+        if new_snap != self.snapshot {
             let track_changed = new_snap.track_rev != self.snapshot.track_rev;
+            let mut settings_dirty = false;
+            if new_snap.volume != self.settings.player.volume {
+                self.settings.player.volume = new_snap.volume;
+                settings_dirty = true;
+            }
+            if new_snap.show_translation != self.settings.lyrics.translate_to_id {
+                self.settings.lyrics.translate_to_id = new_snap.show_translation;
+                settings_dirty = true;
+            }
             self.snapshot = new_snap;
+            if settings_dirty {
+                let _ = self.settings.save(&self.services.paths.settings_file());
+            }
             if track_changed {
                 if let Some(url) = self.snapshot.track.as_ref().and_then(Track::cover_url) {
                     self.request_cover_image(url);
@@ -255,10 +292,7 @@ impl App {
 
         self.position = self.services.engine.position();
         let new_q = self.services.engine.queue();
-        if new_q.tracks.len() != self.queue_snap.tracks.len()
-            || new_q.index != self.queue_snap.index
-            || new_q.summary != self.queue_snap.summary
-        {
+        if new_q != self.queue_snap {
             self.queue_snap = new_q;
         }
         let (_, new_lyr) = self.services.engine.lyrics();
@@ -301,7 +335,7 @@ impl App {
         }
     }
 
-    fn handle_bg_msg(&mut self, msg: BgMsg) {
+    pub fn handle_bg_msg(&mut self, msg: BgMsg) {
         match msg {
             BgMsg::HomeLoaded(Ok(feed)) => {
                 self.home.set_home_feed(feed);
@@ -333,7 +367,7 @@ impl App {
                             if let Some(url) = art.summary.cover_url() {
                                 cover_urls.push(url);
                             }
-                            for al in art.albums.iter().chain(art.singles.iter()).take(12) {
+                            for al in art.albums.iter().chain(art.singles.iter()).take(48) {
                                 if let Some(u) = al.cover_url() {
                                     cover_urls.push(u);
                                 }
@@ -405,6 +439,9 @@ impl App {
                 self.covers.insert_image(url, image);
                 self.refresh_cache_stats();
             }
+            BgMsg::ImageFailed { url } => {
+                self.requested_images.remove(&url);
+            }
             BgMsg::SyncFinished(res) => {
                 self.syncing = false;
                 match res {
@@ -421,61 +458,94 @@ impl App {
                     Err(err) => self.set_toast(format!("Sync error: {err}")),
                 }
             }
-            BgMsg::OAuthCodeStarted(res) => match res {
-                Ok((device_code, user_code, verification_url, interval)) => {
-                    if let Some(ActiveModal::OAuthWizard {
-                        client_id,
-                        client_secret,
-                        page_id,
-                        device_user_code,
-                        verification_url: v_url,
-                        polling,
-                        error,
-                        ..
-                    }) = self.modal.as_mut()
-                    {
-                        *device_user_code = Some(user_code);
-                        *v_url = Some(verification_url);
-                        *polling = true;
-                        *error = None;
-                        let cid = client_id.clone();
-                        let csec = client_secret.clone();
-                        let pid = if page_id.trim().is_empty() {
-                            None
-                        } else {
-                            Some(page_id.trim().to_string())
-                        };
-                        self.spawn_oauth_poller(cid, csec, device_code, pid, interval);
-                    }
+            BgMsg::PlaylistUploaded(res) => match res {
+                Ok(title) => {
+                    self.last_selected_playlist_id = None;
+                    self.reload_local_collections();
+                    self.set_toast(format!("Uploaded \"{title}\" to YouTube Music"));
                 }
-                Err(err) => {
-                    if let Some(ActiveModal::OAuthWizard { error, polling, .. }) =
-                        self.modal.as_mut()
-                    {
-                        *polling = false;
-                        *error = Some(err);
-                    }
-                }
+                Err(err) => self.set_toast(format!("Upload failed: {err}")),
             },
-            BgMsg::OAuthPollCompleted(res) => match res {
-                Ok(OAuthPollStatus::Authorized(_)) => {
-                    self.modal = None;
-                    self.settings.privacy.auth_mode = AuthMode::OAuth;
-                    let _ = self.settings.save(&self.services.paths.settings_file());
-                    self.set_toast("Signed in via OAuth2 — syncing library…");
-                    self.trigger_sync_now();
-                    self.trigger_home_refresh();
+            BgMsg::PlaylistImported(res) => match res {
+                Ok((id, title, count)) => {
+                    self.last_selected_playlist_id = None;
+                    self.reload_local_collections();
+                    self.playlists.select_by_id(&id);
+                    self.set_toast(format!("Imported \"{title}\" ({count} tracks)"));
                 }
-                Ok(_) => {}
-                Err(err) => {
-                    if let Some(ActiveModal::OAuthWizard { error, polling, .. }) =
-                        self.modal.as_mut()
-                    {
-                        *polling = false;
-                        *error = Some(err);
+                Err(err) => self.set_toast(format!("Import failed: {err}")),
+            },
+            BgMsg::OAuthCodeStarted(res) => {
+                // Ignore stale result if the user already closed OAuthWizard
+                if !matches!(self.modal, Some(ActiveModal::OAuthWizard { .. })) {
+                    return;
+                }
+                match res {
+                    Ok((device_code, user_code, verification_url, interval)) => {
+                        if let Some(ActiveModal::OAuthWizard {
+                            client_id,
+                            client_secret,
+                            page_id,
+                            device_user_code,
+                            verification_url: v_url,
+                            polling,
+                            error,
+                            ..
+                        }) = self.modal.as_mut()
+                        {
+                            *device_user_code = Some(user_code);
+                            *v_url = Some(verification_url);
+                            *polling = true;
+                            *error = None;
+                            let cid = client_id.clone();
+                            let csec = client_secret.clone();
+                            let pid = if page_id.trim().is_empty() {
+                                None
+                            } else {
+                                Some(page_id.trim().to_string())
+                            };
+                            self.spawn_oauth_poller(cid, csec, device_code, pid, interval);
+                        }
+                    }
+                    Err(err) => {
+                        if let Some(ActiveModal::OAuthWizard { error, polling, .. }) =
+                            self.modal.as_mut()
+                        {
+                            *polling = false;
+                            *error = Some(err);
+                        }
                     }
                 }
-            },
+            }
+            BgMsg::OAuthPollCompleted(res) => {
+                self.oauth_task = None;
+                // Ignore late authorization if the user already cancelled OAuthWizard
+                if !matches!(self.modal, Some(ActiveModal::OAuthWizard { .. })) {
+                    return;
+                }
+                match res {
+                    Ok(OAuthPollStatus::Authorized(_)) => {
+                        self.modal = None;
+                        self.settings.privacy.auth_mode = AuthMode::OAuth;
+                        let _ = self.settings.save(&self.services.paths.settings_file());
+                        self.services.engine.try_send(AppCommand::ApplySettings {
+                            settings: self.settings.clone(),
+                        });
+                        self.set_toast("Signed in via OAuth2 — syncing library…");
+                        self.trigger_sync_now();
+                        self.trigger_home_refresh();
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        if let Some(ActiveModal::OAuthWizard { error, polling, .. }) =
+                            self.modal.as_mut()
+                        {
+                            *polling = false;
+                            *error = Some(err);
+                        }
+                    }
+                }
+            }
             BgMsg::Toast(msg) => self.set_toast(msg),
         }
     }
@@ -618,12 +688,21 @@ impl App {
                 return;
             }
             Action::Escape if !self.nav_stack.is_empty() => {
+                if let Some(NavPage::PlaylistDetail(v)) = self.nav_stack.last_mut()
+                    && v.has_filter()
+                {
+                    let eff = v.handle_action(Action::Escape);
+                    self.apply_effect(eff);
+                    return;
+                }
                 self.nav_stack.pop();
                 self.sync_cava_state();
                 return;
             }
             Action::StartSearch
-                if !self.nav_stack.is_empty() || matches!(self.active_tab, 3 | 4) =>
+                if (!self.nav_stack.is_empty()
+                    && !matches!(self.nav_stack.last(), Some(NavPage::PlaylistDetail(_))))
+                    || (self.nav_stack.is_empty() && matches!(self.active_tab, 3 | 4)) =>
             {
                 // Global `/` jumps to Home inline search from views without their own filter
                 self.active_tab = 0;
@@ -790,7 +869,10 @@ impl App {
                 error,
                 ..
             } => match action {
-                Action::InputCancel => keep = false,
+                Action::InputCancel => {
+                    self.cancel_oauth_task();
+                    keep = false;
+                }
                 Action::InputTab if device_user_code.is_none() => {
                     *active_field = (*active_field + 1) % 3;
                 }
@@ -817,12 +899,13 @@ impl App {
                     if client_id.trim().is_empty() || client_secret.trim().is_empty() {
                         *error = Some("Client ID and Client Secret are required".into());
                     } else {
+                        self.cancel_oauth_task();
                         *polling = true;
                         *error = None;
                         let cid = client_id.trim().to_string();
                         let auth = self.services.auth.clone();
                         let tx = self.bg_tx.clone();
-                        tokio::spawn(async move {
+                        let jh = tokio::spawn(async move {
                             let res = auth
                                 .start_oauth_device_flow(&cid)
                                 .await
@@ -832,6 +915,7 @@ impl App {
                                 .map_err(|e| e.to_string());
                             let _ = tx.send(BgMsg::OAuthCodeStarted(res));
                         });
+                        self.oauth_task = Some(jh.abort_handle());
                     }
                 }
                 _ => {}
@@ -870,6 +954,9 @@ impl App {
                             keep = false;
                             self.settings.privacy.auth_mode = AuthMode::Browser;
                             let _ = self.settings.save(&self.services.paths.settings_file());
+                            self.services.engine.try_send(AppCommand::ApplySettings {
+                                settings: self.settings.clone(),
+                            });
                             self.set_toast("Browser Auth imported — syncing library…");
                             self.trigger_sync_now();
                             self.trigger_home_refresh();
@@ -1003,6 +1090,19 @@ impl App {
                 self.reload_local_collections();
                 self.playlists.select_by_id(&playlist_id);
                 self.last_selected_playlist_id = None;
+            }
+            ViewEffect::PlayUserPlaylistDirect { playlist_id } => {
+                match self.services.store.playlist_tracks(&playlist_id) {
+                    Ok(tracks) if !tracks.is_empty() => {
+                        self.services.engine.try_send(AppCommand::PlayTracks {
+                            tracks,
+                            start_index: 0,
+                            autoplay: true,
+                        });
+                    }
+                    Ok(_) => self.set_toast("Playlist is empty"),
+                    Err(err) => self.set_toast(format!("Playlist load error: {err}")),
+                }
             }
             ViewEffect::PlayAlbumDirect { browse_id } => {
                 let cat = self.services.catalog.clone();
@@ -1191,17 +1291,12 @@ impl App {
                 let sync = self.services.sync.clone();
                 let tx = self.bg_tx.clone();
                 tokio::spawn(async move {
-                    match sync.promote_local_to_synced(&playlist_id).await {
-                        Ok(pl) => {
-                            let _ = tx.send(BgMsg::Toast(format!(
-                                "Uploaded \"{}\" to YouTube Music",
-                                pl.title
-                            )));
-                        }
-                        Err(err) => {
-                            let _ = tx.send(BgMsg::Toast(format!("Upload failed: {err}")));
-                        }
-                    }
+                    let res = sync
+                        .promote_local_to_synced(&playlist_id)
+                        .await
+                        .map(|pl| pl.title)
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(BgMsg::PlaylistUploaded(res));
                 });
             }
             ViewEffect::CopyUrl(url) => {
@@ -1211,11 +1306,13 @@ impl App {
             ViewEffect::UpdateSettings(next) => {
                 let mut s = *next;
                 let region_changed = s.display.region != self.settings.display.region;
+                let mpris_changed = s.player.mpris_enabled != self.settings.player.mpris_enabled;
                 s.normalize();
                 self.settings = s.clone();
                 self.spinner.reduced_motion = s.display.reduced_motion;
-                self.covers.set_protocol(s.display.image_protocol);
+                let proto_changed = self.covers.set_protocol(s.display.image_protocol);
                 self.library.cover_size = s.display.cover_size;
+                self.services.catalog.set_region(&s.display.region);
                 self.services.cache.update_settings(s.cache.clone());
                 self.services.search.update_settings(s.clone());
                 self.services.engine.try_send(AppCommand::ApplySettings {
@@ -1223,15 +1320,25 @@ impl App {
                 });
                 let _ = s.save(&self.services.paths.settings_file());
                 self.sync_cava_state();
+                if mpris_changed {
+                    self.sync_mpris_state();
+                }
+                if proto_changed {
+                    self.requested_images.clear();
+                    self.re_request_active_covers();
+                }
                 if region_changed {
                     self.trigger_home_refresh();
                 }
             }
             ViewEffect::ClearCache => {
                 self.services.images.clear_memory_cache();
+                self.covers.clear_cache();
+                self.requested_images.clear();
                 match self.services.cache.clear_cache() {
                     Ok(()) => {
                         self.refresh_cache_stats();
+                        self.re_request_active_covers();
                         self.set_toast("Cache cleared & visitorData rotated (Playlists safe)");
                     }
                     Err(err) => self.set_toast(format!("Clear cache failed: {err}")),
@@ -1251,6 +1358,7 @@ impl App {
                 self.set_toast("Local history cleared");
             }
             ViewEffect::Logout => {
+                self.cancel_oauth_task();
                 let prev_acct = self.services.auth.account_key();
                 if let Err(err) = self.services.auth.logout() {
                     self.set_toast(format!("Logout failed: {err}"));
@@ -1261,6 +1369,9 @@ impl App {
                 self.settings.privacy.auth_mode = AuthMode::Anonymous;
                 self.settings.privacy.report_playback_history = false;
                 let _ = self.settings.save(&self.services.paths.settings_file());
+                self.services.engine.try_send(AppCommand::ApplySettings {
+                    settings: self.settings.clone(),
+                });
                 self.last_selected_playlist_id = None;
                 self.reload_local_collections();
                 self.trigger_home_refresh();
@@ -1345,44 +1456,36 @@ impl App {
         let sync = self.services.sync.clone();
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
-            match cat.playlist(&pid, 200).await {
-                Ok(remote) => {
-                    match sync.create_playlist(
-                        &remote.summary.title,
-                        remote.description.as_deref().unwrap_or(""),
-                        false,
-                    ) {
-                        Ok(local_pl) => {
-                            let _ = sync.add_tracks_to_playlist(&local_pl.id, &remote.tracks);
-                            let _ = tx.send(BgMsg::Toast(format!(
-                                "Imported \"{}\" ({} tracks)",
-                                remote.summary.title,
-                                remote.tracks.len()
-                            )));
-                        }
-                        Err(err) => {
-                            let _ = tx.send(BgMsg::Toast(format!("Save import failed: {err}")));
-                        }
+            let res = match cat.playlist(&pid, 200).await {
+                Ok(remote) => match sync.create_playlist(
+                    &remote.summary.title,
+                    remote.description.as_deref().unwrap_or(""),
+                    false,
+                ) {
+                    Ok(local_pl) => {
+                        let _ = sync.add_tracks_to_playlist(&local_pl.id, &remote.tracks);
+                        Ok((local_pl.id, remote.summary.title, remote.tracks.len()))
                     }
-                }
-                Err(err) => {
-                    let _ = tx.send(BgMsg::Toast(format!("Import URL failed: {err}")));
-                }
-            }
+                    Err(err) => Err(format!("Save import failed: {err}")),
+                },
+                Err(err) => Err(format!("Import URL failed: {err}")),
+            };
+            let _ = tx.send(BgMsg::PlaylistImported(res));
         });
     }
 
     fn spawn_oauth_poller(
-        &self,
+        &mut self,
         client_id: String,
         client_secret: String,
         device_code: String,
         page_id: Option<String>,
         interval_secs: u64,
     ) {
+        self.cancel_oauth_task();
         let auth = self.services.auth.clone();
         let tx = self.bg_tx.clone();
-        tokio::spawn(async move {
+        let jh = tokio::spawn(async move {
             let mut wait = Duration::from_secs(interval_secs.max(2));
             for _ in 0..120 {
                 tokio::time::sleep(wait).await;
@@ -1413,6 +1516,70 @@ impl App {
                 "OAuth device code timed out".into(),
             )));
         });
+        self.oauth_task = Some(jh.abort_handle());
+    }
+
+    fn sync_mpris_state(&mut self) {
+        if self.settings.player.mpris_enabled {
+            if self.mpris.is_none()
+                && let Some(ref flag) = self.mpris_quit_flag
+            {
+                self.mpris = Some(MprisService::spawn_with_quit_flag(
+                    self.services.engine.clone(),
+                    flag.clone(),
+                ));
+            }
+        } else if let Some(m) = self.mpris.take() {
+            m.shutdown();
+        }
+    }
+
+    fn re_request_active_covers(&mut self) {
+        let mut urls = Vec::new();
+        if let Some(url) = self.snapshot.track.as_ref().and_then(Track::cover_url) {
+            urls.push(url);
+        }
+        if let Some(top) = self.nav_stack.last() {
+            match top {
+                NavPage::Artist(v) => {
+                    if let Some(ref art) = v.artist {
+                        if let Some(u) = art.summary.cover_url() {
+                            urls.push(u);
+                        }
+                        for al in art.albums.iter().chain(art.singles.iter()).take(48) {
+                            if let Some(u) = al.cover_url() {
+                                urls.push(u);
+                            }
+                        }
+                    }
+                }
+                NavPage::Album(v) => {
+                    if let Some(u) = v.album.as_ref().and_then(|a| a.summary.cover_url()) {
+                        urls.push(u);
+                    }
+                }
+                NavPage::PlaylistDetail(v) => {
+                    if let Some(u) = v.playlist.as_ref().and_then(|p| p.summary.cover_url()) {
+                        urls.push(u);
+                    }
+                }
+            }
+        }
+        for col in self
+            .library
+            .saved_albums
+            .iter()
+            .chain(self.library.saved_artists.iter())
+            .chain(self.library.saved_playlists.iter())
+            .take(48)
+        {
+            if let Some(ref u) = col.thumb_url {
+                urls.push(u.clone());
+            }
+        }
+        for url in urls {
+            self.request_cover_image(url);
+        }
     }
 
     fn request_cover_image(&mut self, url: String) {
@@ -1425,6 +1592,8 @@ impl App {
         tokio::spawn(async move {
             if let Some(img) = images.fetch(&url).await {
                 let _ = tx.send(BgMsg::ImageLoaded { url, image: img });
+            } else {
+                let _ = tx.send(BgMsg::ImageFailed { url });
             }
         });
     }
@@ -1459,6 +1628,20 @@ impl App {
             .list_saved_collections(&acct, SavedCollectionKind::Playlist)
             .unwrap_or_default();
         self.reload_recent_plays();
+
+        let cover_urls: Vec<String> = self
+            .library
+            .saved_albums
+            .iter()
+            .chain(self.library.saved_artists.iter())
+            .chain(self.library.saved_playlists.iter())
+            .take(48)
+            .filter_map(|c| c.thumb_url.clone())
+            .collect();
+        for url in cover_urls {
+            self.request_cover_image(url);
+        }
+
         if let Some(pl) = self.playlists.selected_playlist() {
             let pid = pl.id.clone();
             let trs = self
@@ -1635,6 +1818,13 @@ impl App {
         if let Some(ref modal) = self.modal {
             render_modal(frame, full, modal, self.spinner);
         }
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        self.cancel_oauth_task();
+        self.shutdown_mpris();
     }
 }
 

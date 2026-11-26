@@ -64,9 +64,40 @@ impl TrackTable<'_> {
             }
         }
 
+        // Prevent overflow on narrow viewports by trimming fixed columns when needed
+        let min_flex_total = flex_indices.len().saturating_mul(6);
+        let max_fixed_budget = usable.saturating_sub(min_flex_total);
+        if fixed_sum > max_fixed_budget && fixed_sum > 0 {
+            let mut shrunk_sum = 0usize;
+            for (i, col) in self.columns.iter().enumerate() {
+                if let Some(fw) = col.fixed_width {
+                    let scaled = (fw * max_fixed_budget) / fixed_sum;
+                    widths[i] = scaled.max(3.min(fw));
+                    shrunk_sum += widths[i];
+                }
+            }
+            // If still over budget on extreme narrow widths, trim largest fixed columns
+            while shrunk_sum > max_fixed_budget {
+                let Some((idx, _)) = widths
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| self.columns[*i].fixed_width.is_some())
+                    .max_by_key(|(_, w)| **w)
+                else {
+                    break;
+                };
+                if widths[idx] <= 1 {
+                    break;
+                }
+                widths[idx] -= 1;
+                shrunk_sum -= 1;
+            }
+            fixed_sum = shrunk_sum;
+        }
+
         if !flex_indices.is_empty() {
             let rem = usable.saturating_sub(fixed_sum);
-            let each = (rem / flex_indices.len()).max(4);
+            let each = (rem / flex_indices.len()).max(1);
             let mut leftover = rem.saturating_sub(each * flex_indices.len());
             for &idx in &flex_indices {
                 let extra = if leftover > 0 {
@@ -119,8 +150,22 @@ impl Widget for TrackTable<'_> {
             return;
         }
 
+        let header_rows = if self.show_header {
+            u16::from(area.height >= 1) + u16::from(area.height >= 2)
+        } else {
+            0
+        };
+        let visible_rows_est = usize::from(area.height.saturating_sub(header_rows));
+        let show_scrollbar =
+            visible_rows_est > 0 && self.rows.len() > visible_rows_est && area.width >= 10;
+        let content_width = if show_scrollbar {
+            area.width.saturating_sub(1)
+        } else {
+            area.width
+        };
+
         let gutter = 2usize; // "▸ " or "  "
-        let avail = usize::from(area.width).saturating_sub(gutter);
+        let avail = usize::from(content_width).saturating_sub(gutter);
         let col_widths = self.compute_widths(avail);
 
         let mut y = area.y;
@@ -145,7 +190,7 @@ impl Widget for TrackTable<'_> {
                 Rect {
                     x: area.x,
                     y,
-                    width: area.width,
+                    width: content_width,
                     height: 1,
                 },
                 buf,
@@ -238,7 +283,7 @@ impl Widget for TrackTable<'_> {
             let row_rect = Rect {
                 x: area.x,
                 y: y + offset as u16,
-                width: area.width,
+                width: content_width,
                 height: 1,
             };
             if bg != Color::Reset {
@@ -249,6 +294,23 @@ impl Widget for TrackTable<'_> {
                 }
             }
             Line::from(spans).render(row_rect, buf);
+        }
+
+        if show_scrollbar {
+            let sb_x = area.x + area.width - 1;
+            let total = self.rows.len();
+            let thumb_h = ((visible_rows * visible_rows) / total).clamp(1, visible_rows);
+            let max_scroll = total.saturating_sub(visible_rows).max(1);
+            let thumb_top = (scroll_start * (visible_rows.saturating_sub(thumb_h))) / max_scroll;
+            let thumb_fg = if self.focused { ACCENT } else { DIM };
+            for r in 0..visible_rows {
+                if let Some(cell) = buf.cell_mut((sb_x, y + r as u16)) {
+                    let is_thumb = r >= thumb_top && r < thumb_top + thumb_h;
+                    cell.set_symbol(if is_thumb { "┃" } else { "│" });
+                    cell.set_fg(if is_thumb { thumb_fg } else { BORDER_DIM });
+                    cell.set_bg(Color::Reset);
+                }
+            }
         }
     }
 }

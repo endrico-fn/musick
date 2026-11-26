@@ -281,12 +281,47 @@ impl ArtistView {
                 .selected_track()
                 .map(ViewEffect::ToggleLike)
                 .unwrap_or(ViewEffect::None),
-            Action::CopyUrl => ViewEffect::CopyUrl(format!(
-                "https://music.youtube.com/channel/{}",
-                self.browse_id
-            )),
+            Action::CopyUrl => ViewEffect::CopyUrl(self.selected_url()),
             _ => ViewEffect::None,
         }
+    }
+
+    fn selected_url(&self) -> String {
+        if let Some(ref art) = self.artist {
+            match self.active_tab {
+                ArtistTab::Overview | ArtistTab::Songs => {
+                    if let Some(t) = art.songs.get(self.cursor) {
+                        return t.url();
+                    }
+                }
+                ArtistTab::Videos => {
+                    if let Some(t) = art.videos.get(self.cursor) {
+                        return t.url();
+                    }
+                }
+                ArtistTab::Albums => {
+                    if let Some(al) = self.sorted_releases(false).get(self.cursor) {
+                        return format!("https://music.youtube.com/browse/{}", al.browse_id);
+                    }
+                }
+                ArtistTab::Singles => {
+                    if let Some(al) = self.sorted_releases(true).get(self.cursor) {
+                        return format!("https://music.youtube.com/browse/{}", al.browse_id);
+                    }
+                }
+                ArtistTab::Playlists => {
+                    if let Some(pl) = art.playlists.get(self.cursor) {
+                        return format!("https://music.youtube.com/playlist?list={}", pl.browse_id);
+                    }
+                }
+                ArtistTab::Similar => {
+                    if let Some(rel) = art.related.get(self.cursor) {
+                        return format!("https://music.youtube.com/channel/{}", rel.browse_id);
+                    }
+                }
+            }
+        }
+        format!("https://music.youtube.com/channel/{}", self.browse_id)
     }
 
     fn selected_track(&self) -> Option<Track> {
@@ -417,11 +452,13 @@ impl ArtistView {
         let cov_inner = cov_block.inner(hero_cols[0]);
         frame.render_widget(cov_block, hero_cols[0]);
         let cover_url = self.artist.as_ref().and_then(|a| a.summary.cover_url());
+        let cover_loading =
+            self.loading || cover_url.as_deref().is_some_and(|u| !covers.has_image(u));
         covers.render_cover(
             frame,
             cov_inner,
             cover_url.as_deref(),
-            self.loading,
+            cover_loading,
             ctx.icons.artist,
             ctx.spinner,
         );
@@ -454,7 +491,11 @@ impl ArtistView {
                 stats.push(l.clone());
             }
             if let Some(ref s) = art.subscribers {
-                stats.push(format!("{s} subscribers"));
+                if s.to_ascii_lowercase().contains("subscriber") {
+                    stats.push(s.clone());
+                } else {
+                    stats.push(format!("{s} subscribers"));
+                }
             }
             if !stats.is_empty() {
                 lines.push(Line::from(Span::styled(
