@@ -1,7 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use image::DynamicImage;
+use image::imageops::{self, FilterType};
+use image::{DynamicImage, ImageBuffer, Rgba};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
@@ -19,6 +20,34 @@ use crate::widgets::BrailleSpinner;
 const MAX_IMAGE_CACHE: usize = 128;
 const MAX_PROTO_CACHE: usize = 128;
 
+type ProtoKey = (String, usize, u16, u16);
+
+/// center-crop `src` to 1:1, scale cleanly to `min(canvas_w, canvas_h)`, and center on transparent rgba canvas
+pub fn center_square_canvas(src: &DynamicImage, canvas_w: u32, canvas_h: u32) -> DynamicImage {
+    let cw = canvas_w.max(1);
+    let ch = canvas_h.max(1);
+    let side = cw.min(ch).max(1);
+
+    let (sw, sh) = (src.width(), src.height());
+    let cropped = if sw != sh && sw > 0 && sh > 0 {
+        let s = sw.min(sh);
+        src.crop_imm((sw - s) / 2, (sh - s) / 2, s, s)
+    } else {
+        src.clone()
+    };
+
+    let scaled = cropped.resize_exact(side, side, FilterType::Triangle);
+    if cw == side && ch == side {
+        return scaled;
+    }
+
+    let mut canvas: DynamicImage = ImageBuffer::from_pixel(cw, ch, Rgba([0u8, 0, 0, 0])).into();
+    let ox = i64::from((cw - side) / 2);
+    let oy = i64::from((ch - side) / 2);
+    imageops::overlay(&mut canvas, &scaled, ox, oy);
+    canvas
+}
+
 /// manages terminal graphics protocol detection and bounded stateful image cache
 pub struct CoverRenderer {
     picker: Picker,
@@ -27,8 +56,8 @@ pub struct CoverRenderer {
     font_size: (u16, u16),
     images: HashMap<String, Arc<DynamicImage>>,
     image_order: VecDeque<String>,
-    protocols: HashMap<(String, usize), StatefulProtocol>,
-    proto_order: VecDeque<(String, usize)>,
+    protocols: HashMap<ProtoKey, StatefulProtocol>,
+    proto_order: VecDeque<ProtoKey>,
     frame_counts: HashMap<String, usize>,
 }
 
@@ -94,11 +123,11 @@ impl CoverRenderer {
         }
     }
 
-    /// outer column width so a bordered panel with 1-cell horizontal padding forms a 1:1 visual square
+    /// outer column width so the border stroke rectangle `(W - 1) * fw` × `(H - 1) * fh` is a 1:1 visual square
     pub fn square_panel_width(&self, panel_height: u16, max_width: u16) -> u16 {
         let aspect = self.cell_aspect();
-        let desired = if panel_height > 2 {
-            ((f64::from(panel_height - 2) * aspect).ceil() as u16).saturating_add(4)
+        let desired = if panel_height > 1 {
+            ((f64::from(panel_height - 1) * aspect).round() as u16).saturating_add(1)
         } else {
             (f64::from(panel_height) * aspect).round() as u16
         };
@@ -145,22 +174,30 @@ impl CoverRenderer {
         while self.images.len() > MAX_IMAGE_CACHE {
             if let Some(oldest) = self.image_order.pop_front() {
                 self.images.remove(&oldest);
-                self.protocols.retain(|(u, _), _| u != &oldest);
-                self.proto_order.retain(|(u, _)| u != &oldest);
+                self.protocols.retain(|(u, ..), _| u != &oldest);
+                self.proto_order.retain(|(u, ..)| u != &oldest);
             } else {
                 break;
             }
         }
-        // refresh any cached stateful protocols for updated image bytes
-        self.protocols.retain(|(u, _), _| u != &url);
-        self.proto_order.retain(|(u, _)| u != &url);
+        self.protocols.retain(|(u, ..), _| u != &url);
+        self.proto_order.retain(|(u, ..)| u != &url);
     }
 
     pub fn has_image(&self, url: &str) -> bool {
         self.images.contains_key(url)
     }
 
-    fn protocol_for_frame(&mut self, url: &str) -> Option<&mut StatefulProtocol> {
+    fn uses_pixel_protocol(&self) -> bool {
+        !matches!(self.picker.protocol_type(), ProtocolType::Halfblocks)
+    }
+
+    fn protocol_for_frame(
+        &mut self,
+        url: &str,
+        width: u16,
+        height: u16,
+    ) -> Option<&mut StatefulProtocol> {
         if !self.enabled || !self.images.contains_key(url) {
             return None;
         }
@@ -170,10 +207,18 @@ impl CoverRenderer {
             *count += 1;
             cur
         };
-        let key = (url.to_string(), occ);
+        let key: ProtoKey = (url.to_string(), occ, width, height);
         if !self.protocols.contains_key(&key) {
-            let img = self.images.get(url)?;
-            let proto = self.picker.new_resize_protocol((**img).clone());
+            let src = self.images.get(url)?;
+            let prepared = if self.uses_pixel_protocol() {
+                let (fw, fh) = self.font_size;
+                let cw = u32::from(width) * u32::from(fw.max(1));
+                let ch = u32::from(height) * u32::from(fh.max(1));
+                center_square_canvas(src, cw, ch)
+            } else {
+                (**src).clone()
+            };
+            let proto = self.picker.new_resize_protocol(prepared);
             self.protocols.insert(key.clone(), proto);
             self.proto_order.push_back(key.clone());
             while self.protocols.len() > MAX_PROTO_CACHE {
@@ -189,20 +234,20 @@ impl CoverRenderer {
         self.protocols.get_mut(&key)
     }
 
-    /// 1:1 visual square centered inside `area` using the actual terminal cell aspect ratio
+    /// 1:1 visual square cell rect centered inside `area` (used for halfblock fallback)
     pub fn square_rect(&self, area: Rect) -> Rect {
         if area.width < 2 || area.height == 0 {
             return Rect::default();
         }
         let aspect = self.cell_aspect();
-        let w_for_full_h = (f64::from(area.height) * aspect).ceil() as u16;
+        let w_for_full_h = (f64::from(area.height) * aspect).round() as u16;
         let (w, h) = if w_for_full_h <= area.width {
             (w_for_full_h.max(2), area.height)
         } else {
             let h_fit = ((f64::from(area.width) / aspect).floor() as u16)
                 .max(1)
                 .min(area.height);
-            let w_fit = ((f64::from(h_fit) * aspect).ceil() as u16)
+            let w_fit = ((f64::from(h_fit) * aspect).round() as u16)
                 .min(area.width)
                 .max(2);
             (w_fit, h_fit)
@@ -229,16 +274,26 @@ impl CoverRenderer {
         if area.width < 2 || area.height == 0 {
             return;
         }
-        let target = self.square_rect(area);
+        let pixel_proto = self.uses_pixel_protocol();
+        let target = if pixel_proto {
+            area
+        } else {
+            self.square_rect(area)
+        };
         if target.width < 2 || target.height == 0 {
             return;
         }
 
         if self.enabled
             && let Some(u) = url
-            && let Some(proto) = self.protocol_for_frame(u)
+            && let Some(proto) = self.protocol_for_frame(u, target.width, target.height)
         {
-            let widget = StatefulImage::default().resize(Resize::Fit(None));
+            let resize = if pixel_proto {
+                Resize::Fit(Some(FilterType::Triangle))
+            } else {
+                Resize::Scale(Some(FilterType::Triangle))
+            };
+            let widget = StatefulImage::default().resize(resize);
             frame.render_stateful_widget(widget, target, proto);
             return;
         }
@@ -276,9 +331,9 @@ impl CoverRenderer {
         }
         if self.enabled
             && let Some(u) = url
-            && let Some(proto) = self.protocol_for_frame(u)
+            && let Some(proto) = self.protocol_for_frame(u, area.width, area.height)
         {
-            let widget = StatefulImage::default().resize(Resize::Fit(None));
+            let widget = StatefulImage::default().resize(Resize::Fit(Some(FilterType::Triangle)));
             frame.render_stateful_widget(widget, area, proto);
             return;
         }

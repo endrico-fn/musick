@@ -8,7 +8,7 @@ use musick_core::{AppCommand, Playlist, SavedCollectionKind, Track};
 
 use crate::keymap::Action;
 use crate::text::{Align, trunc_cells, wrap_cells};
-use crate::theme::{ACCENT, CURSOR_BG, DIM, TEXT, panel_block};
+use crate::theme::{ACCENT, CURSOR_BG, DIM, TEXT, cover_panel_block, panel_block};
 use crate::views::{RenderCtx, TrackSortMode, ViewEffect};
 use crate::widgets::{ColumnDef, CoverRenderer, TableRow, TrackTable};
 
@@ -240,7 +240,7 @@ impl PlaylistDetailView {
             ])
             .split(parts[0]);
 
-        let cov_block = panel_block("Playlist", None, false);
+        let cov_block = cover_panel_block("Playlist", None, false);
         let cov_inner = cov_block.inner(hero_cols[0]);
         frame.render_widget(cov_block, hero_cols[0]);
         let cover_url = self.playlist.as_ref().and_then(|p| p.summary.cover_url());

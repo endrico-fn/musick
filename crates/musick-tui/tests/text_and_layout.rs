@@ -73,7 +73,10 @@ mod widget_render_tests {
         AuthMode, CavaPalette, ImageProtocol, LyricLine, Lyrics, PlaybackSnapshot, PositionTick,
         Track,
     };
-    use musick_tui::theme::{ACCENT, BORDER, UNICODE_ICONS, WARN_GOLD, panel_block};
+    use musick_tui::theme::{
+        ACCENT, BORDER, UNICODE_ICONS, WARN_GOLD, cover_panel_block, panel_block,
+    };
+    use musick_tui::widgets::cover::center_square_canvas;
     use musick_tui::widgets::{
         BrailleSpinner, CavaWidget, ColumnDef, CoverRenderer, LyricsBox, MediaListItem,
         NowPlayingBar, SCROLL_THUMB_GLYPH, SCROLL_TRACK_GLYPH, TableRow, TopBar, TrackTable,
@@ -265,36 +268,68 @@ mod widget_render_tests {
 
     #[test]
     fn cover_renderer_computes_true_1_to_1_square_panel_and_inner_rect_for_real_font_aspect() {
-        for (fw, fh) in [(8u16, 16u16), (9, 20), (10, 22)] {
+        for (fw, fh) in [(7u16, 17u16), (8, 16), (9, 20), (10, 22)] {
             let covers = CoverRenderer::with_font_size((fw, fh));
-            let panel_h = 19u16;
+            let panel_h = 17u16;
             let panel_w = covers.square_panel_width(panel_h, 70);
 
-            // Outer bordered panel visual pixel aspect must be within ±5% of 1:1 square
-            let outer_px_w = f64::from(panel_w) * f64::from(fw);
-            let outer_px_h = f64::from(panel_h) * f64::from(fh);
-            let outer_ratio = outer_px_w / outer_px_h;
+            // Border stroke-to-stroke pixel aspect `(W - 1)*fw / (H - 1)*fh` must be within ±2% of 1:1
+            let stroke_w = f64::from(panel_w - 1) * f64::from(fw);
+            let stroke_h = f64::from(panel_h - 1) * f64::from(fh);
+            let border_ratio = stroke_w / stroke_h;
             assert!(
-                (0.95..=1.05).contains(&outer_ratio),
-                "font ({fw}x{fh}): outer {panel_w}x{panel_h} has ratio {outer_ratio:.3}"
+                (0.98..=1.02).contains(&border_ratio),
+                "font ({fw}x{fh}): border {panel_w}x{panel_h} has stroke ratio {border_ratio:.4}"
             );
 
-            // Inner cover rect (accounting for border + 1-cell horizontal panel padding) fills 100% of inner height
-            let block = panel_block("Now Playing", None, false);
+            // cover_panel_block has zero extra horizontal padding so inner canvas centers exact 1:1 cover with symmetric 4-side gaps
+            let block = cover_panel_block("Now Playing", None, false);
             let inner = block.inner(Rect::new(0, 0, panel_w, panel_h));
-            assert_eq!(inner.width, panel_w - 4);
+            assert_eq!(inner.width, panel_w - 2);
             assert_eq!(inner.height, panel_h - 2);
-            let sq = covers.square_rect(inner);
-            assert_eq!(sq.height, inner.height);
-            assert!(sq.width <= inner.width);
-            let inner_ratio =
-                (f64::from(sq.width) * f64::from(fw)) / (f64::from(sq.height) * f64::from(fh));
+
+            let canvas_w = u32::from(inner.width) * u32::from(fw);
+            let canvas_h = u32::from(inner.height) * u32::from(fh);
+            let side = canvas_w.min(canvas_h);
+            let ox = (canvas_w - side) / 2;
+            let right_slack = canvas_w - side - ox;
+            let left_gap = f64::from(fw) / 2.0 + ox as f64;
+            let right_gap = f64::from(fw) / 2.0 + right_slack as f64;
+            let vert_gap = f64::from(fh) / 2.0;
             assert!(
-                (0.98..=1.08).contains(&inner_ratio),
-                "font ({fw}x{fh}): inner {}x{} has ratio {inner_ratio:.3}",
-                sq.width,
-                sq.height
+                (left_gap - right_gap).abs() <= 1.0,
+                "font ({fw}x{fh}): left_gap={left_gap} right_gap={right_gap}"
             );
+            assert!(
+                (left_gap - vert_gap).abs() <= f64::from(fw) / 2.0 + 1.0,
+                "font ({fw}x{fh}): left_gap={left_gap} vert_gap={vert_gap}"
+            );
+
+            // Verify center_square_canvas outputs exact canvas_w x canvas_h with centered 1:1 opaque pixels
+            let src = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_pixel(
+                100,
+                100,
+                image::Rgba([255, 0, 0, 255]),
+            ));
+            let centered = center_square_canvas(&src, canvas_w, canvas_h).to_rgba8();
+            assert_eq!(centered.width(), canvas_w);
+            assert_eq!(centered.height(), canvas_h);
+            let mut min_x = canvas_w;
+            let mut max_x = 0u32;
+            let mut min_y = canvas_h;
+            let mut max_y = 0u32;
+            for (x, y, p) in centered.enumerate_pixels() {
+                if p[3] > 0 {
+                    min_x = min_x.min(x);
+                    max_x = max_x.max(x);
+                    min_y = min_y.min(y);
+                    max_y = max_y.max(y);
+                }
+            }
+            assert_eq!(max_x - min_x + 1, side);
+            assert_eq!(max_y - min_y + 1, side);
+            assert_eq!(min_x, ox);
+            assert_eq!(canvas_w - 1 - max_x, right_slack);
         }
     }
 

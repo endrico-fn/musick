@@ -10,7 +10,7 @@ use musick_core::{
 
 use crate::keymap::Action;
 use crate::text::{Align, trunc_cells};
-use crate::theme::{ACCENT, CURSOR_BG, DIM, TEXT, panel_block};
+use crate::theme::{ACCENT, CURSOR_BG, DIM, TEXT, cover_panel_block, panel_block};
 use crate::views::{RenderCtx, ViewEffect};
 use crate::widgets::{
     CavaWidget, ColumnDef, CoverRenderer, LyricsBox, MediaListItem, SectionTabs, TableRow,
@@ -680,9 +680,9 @@ impl HomeView {
         let max_cover_w = ((u32::from(area.width) * 44) / 100)
             .min(u32::from(area.width.saturating_sub(24)))
             .max(12) as u16;
-        let max_square_h = (((f64::from(max_cover_w.saturating_sub(4))) / covers.cell_aspect())
+        let max_square_h = (((f64::from(max_cover_w.saturating_sub(1))) / covers.cell_aspect())
             .floor() as u16)
-            .saturating_add(2)
+            .saturating_add(1)
             .max(6);
         let base_top_h = ((u32::from(area.height) * 61) / 100)
             .max(6)
@@ -704,8 +704,8 @@ impl HomeView {
             ])
             .split(rows[0]);
 
-        // Top-Left: Now Playing Cover
-        let cover_block = panel_block("Now Playing", None, false);
+        // Top-Left: Now Playing Cover (zero extra horizontal padding so border & cover are exact 1:1)
+        let cover_block = cover_panel_block("Now Playing", None, false);
         let cover_inner = cover_block.inner(top_cols[0]);
         frame.render_widget(cover_block, top_cols[0]);
         let cover_url = ctx.snapshot.track.as_ref().and_then(Track::cover_url);

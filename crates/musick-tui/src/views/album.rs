@@ -8,7 +8,7 @@ use musick_core::{Album, AppCommand, SavedCollectionKind};
 
 use crate::keymap::Action;
 use crate::text::{Align, trunc_cells, wrap_cells};
-use crate::theme::{ACCENT, DIM, TEXT, panel_block};
+use crate::theme::{ACCENT, DIM, TEXT, cover_panel_block, panel_block};
 use crate::views::{RenderCtx, ViewEffect};
 use crate::widgets::{ColumnDef, CoverRenderer, TableRow, TrackTable};
 
@@ -202,7 +202,7 @@ impl AlbumView {
             ])
             .split(parts[0]);
 
-        let cov_block = panel_block("Album", None, false);
+        let cov_block = cover_panel_block("Album", None, false);
         let cov_inner = cov_block.inner(hero_cols[0]);
         frame.render_widget(cov_block, hero_cols[0]);
         let cover_url = self.album.as_ref().and_then(|a| a.summary.cover_url());

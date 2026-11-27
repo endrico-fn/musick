@@ -8,7 +8,7 @@ use musick_core::{AlbumSummary, AppCommand, Artist, CoverSize, SavedCollectionKi
 
 use crate::keymap::Action;
 use crate::text::{Align, trunc_cells, wrap_cells};
-use crate::theme::{ACCENT, BORDER_DIM, DIM, TEXT, panel_block};
+use crate::theme::{ACCENT, BORDER_DIM, DIM, TEXT, cover_panel_block, panel_block};
 use crate::views::{RenderCtx, ViewEffect};
 use crate::widgets::{
     ColumnDef, CoverRenderer, GridCardItem, MediaListItem, SectionTabs, TableRow, TrackTable,
@@ -454,7 +454,7 @@ impl ArtistView {
             ])
             .split(v_parts[0]);
 
-        let cov_block = panel_block("Artist", None, false);
+        let cov_block = cover_panel_block("Artist", None, false);
         let cov_inner = cov_block.inner(hero_cols[0]);
         frame.render_widget(cov_block, hero_cols[0]);
         let cover_url = self.artist.as_ref().and_then(|a| a.summary.cover_url());

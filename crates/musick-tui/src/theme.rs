@@ -156,12 +156,29 @@ pub fn cursor_style(focused: bool) -> Style {
 }
 
 pub fn panel_block<'a>(title: &'a str, subtitle: Option<&'a str>, focused: bool) -> Block<'a> {
+    build_panel_block(title, subtitle, focused, Padding::horizontal(1))
+}
+
+pub fn cover_panel_block<'a>(
+    title: &'a str,
+    subtitle: Option<&'a str>,
+    focused: bool,
+) -> Block<'a> {
+    build_panel_block(title, subtitle, focused, Padding::ZERO)
+}
+
+fn build_panel_block<'a>(
+    title: &'a str,
+    subtitle: Option<&'a str>,
+    focused: bool,
+    padding: Padding,
+) -> Block<'a> {
     let border_color = if focused { ACCENT } else { BORDER };
     let title_color = if focused { ACCENT } else { TEXT };
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .padding(Padding::horizontal(1))
+        .padding(padding)
         .border_style(Style::default().fg(border_color).bg(Color::Reset))
         .style(Style::default().bg(Color::Reset))
         .title(
