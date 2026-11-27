@@ -126,13 +126,16 @@ impl PlayerView {
                 .map(|it| save_effect_for_item(&it))
                 .unwrap_or(ViewEffect::None),
             Action::ToggleArtistFollow => match self.hovered_item() {
-                Some(SearchItem::Artist(ar)) => ViewEffect::ToggleSave {
-                    kind: SavedCollectionKind::Artist,
-                    browse_id: ar.browse_id,
-                    title: ar.name,
-                    subtitle: ar.subtitle,
-                    thumb_url: ar.cover_url(),
-                },
+                Some(SearchItem::Artist(ar)) => {
+                    let thumb_url = ar.cover_url();
+                    ViewEffect::ToggleSave {
+                        kind: SavedCollectionKind::Artist,
+                        browse_id: ar.browse_id,
+                        title: ar.name,
+                        subtitle: ar.subtitle,
+                        thumb_url,
+                    }
+                }
                 _ => ViewEffect::None,
             },
             Action::ArtistShuffle => self
