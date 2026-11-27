@@ -280,10 +280,6 @@ pub fn parse_artist(browse_id: &str, raw: &Value) -> Artist {
     artist
 }
 
-pub fn parse_artist_releases(raw: &Value, default_kind: &str) -> Vec<AlbumSummary> {
-    parse_artist_releases_with_continuation(raw, default_kind).0
-}
-
 pub fn parse_artist_releases_with_continuation(
     raw: &Value,
     default_kind: &str,

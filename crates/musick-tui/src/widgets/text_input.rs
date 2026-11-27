@@ -3,7 +3,7 @@ use ratatui::text::Span;
 use unicode_width::UnicodeWidthChar;
 
 use crate::keymap::Action;
-use crate::theme::{ACCENT, BTN_PRIMARY_FG, CURSOR_BG, DIM, TEXT};
+use crate::theme::{DIM, TEXT, active_theme};
 
 /// single-line editable utf-8 text buffer with char-index cursor
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -234,6 +234,7 @@ impl TextInput {
                 Style::default().fg(TEXT).bg(Color::Reset),
             )];
         }
+        let theme = active_theme();
         let (before, cursor_glyph, after) = self.visible_slice(max_cols);
         let mut spans = Vec::with_capacity(3);
         if !before.is_empty() {
@@ -241,7 +242,7 @@ impl TextInput {
                 before,
                 Style::default()
                     .fg(TEXT)
-                    .bg(CURSOR_BG)
+                    .bg(theme.cursor_bg)
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -249,8 +250,8 @@ impl TextInput {
             spans.push(Span::styled(
                 cursor_glyph,
                 Style::default()
-                    .fg(BTN_PRIMARY_FG)
-                    .bg(ACCENT)
+                    .fg(theme.btn_primary_fg)
+                    .bg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             ));
         }
@@ -259,7 +260,7 @@ impl TextInput {
                 after,
                 Style::default()
                     .fg(TEXT)
-                    .bg(CURSOR_BG)
+                    .bg(theme.cursor_bg)
                     .add_modifier(Modifier::BOLD),
             ));
         }

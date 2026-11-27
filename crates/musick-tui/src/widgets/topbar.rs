@@ -7,7 +7,7 @@ use ratatui::widgets::Widget;
 use musick_core::AuthMode;
 
 use crate::text::cell_width;
-use crate::theme::{ACCENT, BORDER, DIM, IconSet, TEXT, WARN_GOLD};
+use crate::theme::{BORDER, DIM, IconSet, TEXT, WARN_GOLD, active_theme};
 use crate::widgets::BrailleSpinner;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -78,11 +78,49 @@ pub struct TopBar<'a> {
     pub status_toast: Option<&'a str>,
 }
 
+pub fn compute_topbar_tab_hitboxes(area: Rect, icons: IconSet) -> Vec<(RootTab, Rect)> {
+    if area.height == 0 || area.width == 0 {
+        return Vec::new();
+    }
+    let w = usize::from(area.width);
+    let compact = w < 84;
+    let tabs = if compact {
+        ROOT_TABS_COMPACT
+    } else {
+        ROOT_TABS
+    };
+    let gap_w = if w >= 100 {
+        3
+    } else if w >= 84 {
+        2
+    } else {
+        1
+    };
+    let brand = format!("{} ", icons.brand);
+    let mut x = 1 + cell_width(&brand) + cell_width("musick") + gap_w;
+    let mut out = Vec::with_capacity(tabs.len());
+    for (idx, &(_, label)) in tabs.iter().enumerate() {
+        if idx > 0 {
+            x += gap_w;
+        }
+        let lw = cell_width(label);
+        if let Some(tab) = RootTab::from_index(idx) {
+            out.push((
+                tab,
+                Rect::new(area.x.saturating_add(x as u16), area.y, lw as u16, 1),
+            ));
+        }
+        x += lw;
+    }
+    out
+}
+
 impl Widget for TopBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 || area.width == 0 {
             return;
         }
+        let accent = active_theme().accent;
         let w = usize::from(area.width);
         let compact = w < 84;
         let tabs = if compact {
@@ -109,7 +147,7 @@ impl Widget for TopBar<'_> {
         x += cell_width(&brand) + cell_width("musick");
         spans.push(Span::styled(
             brand,
-            Style::default().fg(ACCENT).bg(Color::Reset),
+            Style::default().fg(accent).bg(Color::Reset),
         ));
         spans.push(Span::styled(
             "musick",
@@ -132,7 +170,7 @@ impl Widget for TopBar<'_> {
             let is_act = idx == self.active_tab.index();
             let style = if is_act {
                 Style::default()
-                    .fg(ACCENT)
+                    .fg(accent)
                     .bg(Color::Reset)
                     .add_modifier(Modifier::BOLD)
             } else {
@@ -146,24 +184,24 @@ impl Widget for TopBar<'_> {
         }
 
         let (badge_text, dot_color) = if let Some(toast) = self.status_toast {
-            (format!("{toast} "), ACCENT)
+            (format!("{toast} "), accent)
         } else if self.syncing {
-            (format!("{} syncing ", self.spinner.frame()), ACCENT)
+            (format!("{} syncing ", self.spinner.frame()), accent)
         } else {
             match self.auth_mode {
-                AuthMode::Anonymous => ("no cookies ".to_string(), ACCENT),
+                AuthMode::Anonymous => ("no cookies ".to_string(), accent),
                 AuthMode::OAuth => {
                     if self.pending_sync > 0 {
                         (format!("oauth · {}↑ ", self.pending_sync), WARN_GOLD)
                     } else {
-                        ("oauth ".to_string(), ACCENT)
+                        ("oauth ".to_string(), accent)
                     }
                 }
                 AuthMode::Browser => {
                     if self.pending_sync > 0 {
                         (format!("browser · {}↑ ", self.pending_sync), WARN_GOLD)
                     } else {
-                        ("browser ".to_string(), ACCENT)
+                        ("browser ".to_string(), accent)
                     }
                 }
             }
@@ -217,7 +255,7 @@ impl Widget for TopBar<'_> {
                     if e > s {
                         l2.push(Span::styled(
                             "━".repeat(e - s),
-                            Style::default().fg(ACCENT).bg(Color::Reset),
+                            Style::default().fg(accent).bg(Color::Reset),
                         ));
                     }
                     if e < w {

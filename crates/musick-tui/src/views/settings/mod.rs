@@ -2,15 +2,15 @@ mod render;
 mod rows;
 
 use musick_core::{
-    AudioQuality, AuthMode, CavaAudioSource, CavaPalette, CavaSmoothing, IconMode, ImageProtocol,
-    LyricsSource, Settings, VALID_REGIONS,
+    AudioQuality, AuthMode, CavaAudioSource, CavaSmoothing, IconMode, ImageProtocol, LyricsSource,
+    Settings, VALID_REGIONS,
 };
 
 use crate::keymap::Action;
 use crate::views::ViewEffect;
 use crate::widgets::{ActiveModal, ConfirmAction, ScrollState, TextInput};
 
-pub use rows::SettingRow;
+pub use rows::{SettingRow, SettingsSection};
 
 use rows::{
     ALL_ROWS, AUTO_SYNC_STEPS, CACHE_SECS_STEPS, CATALOG_TTL_STEPS, IMAGE_CAP_MIB_STEPS, cycle_u32,
@@ -18,6 +18,8 @@ use rows::{
 };
 
 pub struct SettingsView {
+    pub section: SettingsSection,
+    pub secret_backend: &'static str,
     pub cursor: usize,
     pub scroll: ScrollState,
     pub filter_active: bool,
@@ -33,6 +35,8 @@ impl Default for SettingsView {
 impl SettingsView {
     pub fn new() -> Self {
         Self {
+            section: SettingsSection::All,
+            secret_backend: "OS Keyring",
             cursor: 0,
             scroll: ScrollState::new(),
             filter_active: false,
@@ -49,6 +53,9 @@ impl SettingsView {
     }
 
     pub fn select_row(&mut self, target: SettingRow) {
+        if !self.section.matches(target) {
+            self.section = SettingsSection::All;
+        }
         let vis = self.visible_rows();
         if let Some(pos) = vis.iter().position(|r| *r == target) {
             self.cursor = pos;
@@ -57,14 +64,13 @@ impl SettingsView {
 
     pub(super) fn visible_rows(&self) -> Vec<SettingRow> {
         let q = self.filter.trim().to_lowercase();
-        if q.is_empty() {
-            return ALL_ROWS.to_vec();
-        }
         ALL_ROWS
             .iter()
             .copied()
+            .filter(|&r| self.section.matches(r))
             .filter(|r| {
-                r.group().to_lowercase().contains(&q)
+                q.is_empty()
+                    || r.group().to_lowercase().contains(&q)
                     || r.label().to_lowercase().contains(&q)
                     || r.description().to_lowercase().contains(&q)
             })
@@ -76,12 +82,13 @@ impl SettingsView {
             &[("Enter", "apply filter"), ("Esc", "close filter")]
         } else {
             &[
+                ("Tab", "section"),
                 ("/", "filter"),
                 ("j k", "select"),
                 ("Enter/l/h", "toggle / cycle"),
                 ("S", "sync now"),
                 ("?", "help"),
-                ("q", "quit"),
+                ("Q", "quit"),
             ]
         }
     }
@@ -116,6 +123,18 @@ impl SettingsView {
         }
 
         match action {
+            Action::NextSubTab => {
+                self.section = self.section.next();
+                self.cursor = 0;
+                self.scroll.reset();
+                ViewEffect::None
+            }
+            Action::PrevSubTab => {
+                self.section = self.section.prev();
+                self.cursor = 0;
+                self.scroll.reset();
+                ViewEffect::None
+            }
             Action::StartSearch => {
                 self.filter_active = true;
                 ViewEffect::None
@@ -291,6 +310,9 @@ impl SettingsView {
                     action: ConfirmAction::ClearCache,
                 });
             }
+            SettingRow::ThemeAccent => {
+                next.display.accent = next.display.accent.toggle();
+            }
             SettingRow::Region => {
                 let idx = VALID_REGIONS
                     .iter()
@@ -333,25 +355,6 @@ impl SettingsView {
             }
             SettingRow::CavaEnabled => {
                 next.display.cava_enabled = !next.display.cava_enabled;
-            }
-            SettingRow::CavaPalette => {
-                const PALS: &[CavaPalette] = &[
-                    CavaPalette::Teal,
-                    CavaPalette::Emerald,
-                    CavaPalette::Aurora,
-                    CavaPalette::Sunset,
-                    CavaPalette::Mono,
-                ];
-                let idx = PALS
-                    .iter()
-                    .position(|p| *p == next.display.cava_palette)
-                    .unwrap_or(0);
-                let next_idx = if forward {
-                    (idx + 1) % PALS.len()
-                } else {
-                    (idx + PALS.len() - 1) % PALS.len()
-                };
-                next.display.cava_palette = PALS[next_idx];
             }
             SettingRow::CavaSmoothing => {
                 next.display.cava_smoothing = match (next.display.cava_smoothing, forward) {

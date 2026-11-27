@@ -1,6 +1,9 @@
 mod render;
 
-use musick_core::{AppCommand, SavedCollection, Track, UserPlaylist};
+use musick_core::{
+    AlbumSummary, AppCommand, ArtistSummary, PlaylistSummary, SavedCollection, SearchItem, Thumb,
+    Track, UserPlaylist,
+};
 
 use crate::keymap::Action;
 use crate::views::ViewEffect;
@@ -86,16 +89,113 @@ impl LibraryView {
         self.selected_track()
     }
 
+    pub fn hovered_item(&self) -> Option<SearchItem> {
+        match self.active_tab {
+            LibraryTab::LikedSongs | LibraryTab::Recent => {
+                self.selected_track().map(SearchItem::Track)
+            }
+            LibraryTab::SavedAlbums => self.selected_collection().map(|c| {
+                let thumbs = c
+                    .thumb_url
+                    .map(|url| {
+                        vec![Thumb {
+                            url,
+                            width: 0,
+                            height: 0,
+                        }]
+                    })
+                    .unwrap_or_default();
+                SearchItem::Album(AlbumSummary {
+                    browse_id: c.browse_id,
+                    title: c.title,
+                    year: None,
+                    kind: "Album".to_string(),
+                    artists: Vec::new(),
+                    thumbs,
+                })
+            }),
+            LibraryTab::SavedArtists => self.selected_collection().map(|c| {
+                let thumbs = c
+                    .thumb_url
+                    .map(|url| {
+                        vec![Thumb {
+                            url,
+                            width: 0,
+                            height: 0,
+                        }]
+                    })
+                    .unwrap_or_default();
+                SearchItem::Artist(ArtistSummary {
+                    browse_id: c.browse_id,
+                    name: c.title,
+                    subtitle: c.subtitle,
+                    thumbs,
+                })
+            }),
+            LibraryTab::SavedPlaylists => self.selected_collection().map(|c| {
+                let thumbs = c
+                    .thumb_url
+                    .map(|url| {
+                        vec![Thumb {
+                            url,
+                            width: 0,
+                            height: 0,
+                        }]
+                    })
+                    .unwrap_or_default();
+                SearchItem::Playlist(PlaylistSummary {
+                    browse_id: c.browse_id,
+                    title: c.title,
+                    author: c.subtitle,
+                    count: None,
+                    thumbs,
+                })
+            }),
+            LibraryTab::UserPlaylists => None,
+        }
+    }
+
     pub fn footer_hints(&self) -> &'static [(&'static str, &'static str)] {
-        &[
-            ("Tab", "sub-tab"),
-            ("/", "filter"),
-            ("Enter", "open/play"),
-            ("p", "play"),
-            ("N/a", "next/queue"),
-            ("dd/w", "remove"),
-            ("S", "sync"),
-        ]
+        match self.active_tab {
+            LibraryTab::LikedSongs | LibraryTab::Recent => &[
+                ("Tab", "sub-tab"),
+                ("/", "filter"),
+                ("Enter", "play"),
+                ("N/q", "next/queue"),
+                ("A/a", "artist/album"),
+                ("e", "menu"),
+                ("dd", "unlike"),
+                ("S", "sync"),
+            ],
+            LibraryTab::SavedArtists => &[
+                ("Tab", "sub-tab"),
+                ("Enter", "profile"),
+                ("a", "albums"),
+                ("x/r", "shuf/mix"),
+                ("w", "unfollow"),
+                ("e", "menu"),
+                ("S", "sync"),
+            ],
+            LibraryTab::SavedPlaylists => &[
+                ("Tab", "sub-tab"),
+                ("Enter", "open"),
+                ("x/r", "shuf/mix"),
+                ("N/q", "next/queue"),
+                ("w/P", "remove/copy"),
+                ("e", "menu"),
+                ("S", "sync"),
+            ],
+            _ => &[
+                ("Tab", "sub-tab"),
+                ("/", "filter"),
+                ("Enter", "open/play"),
+                ("x", "shuffle"),
+                ("N/q", "next/queue"),
+                ("dd/w", "remove"),
+                ("e", "menu"),
+                ("S", "sync"),
+            ],
+        }
     }
 
     pub(super) fn matches_track(t: &Track, q: &str) -> bool {
@@ -221,25 +321,117 @@ impl LibraryView {
             }
             Action::Activate => self.activate_selected(),
             Action::PlayDirect => self.play_selected_direct(),
-            Action::PlayNext => self
-                .selected_track()
-                .map(|t| ViewEffect::Command(AppCommand::PlayNext { tracks: vec![t] }))
-                .unwrap_or(ViewEffect::None),
-            Action::AppendQueue => self
-                .selected_track()
-                .map(|t| ViewEffect::Command(AppCommand::AppendTracks { tracks: vec![t] }))
-                .unwrap_or(ViewEffect::None),
-            Action::AddToPlaylist => self
-                .selected_track()
-                .map(ViewEffect::AddToPlaylistPicker)
-                .unwrap_or(ViewEffect::None),
+            Action::PlayNext => self.queue_selected(true),
+            Action::AppendQueue => self.queue_selected(false),
+            Action::AddToPlaylist => match self.active_tab {
+                LibraryTab::LikedSongs | LibraryTab::Recent => self
+                    .selected_track()
+                    .map(ViewEffect::AddToPlaylistPicker)
+                    .unwrap_or(ViewEffect::None),
+                LibraryTab::SavedPlaylists => self
+                    .selected_collection()
+                    .map(|c| ViewEffect::ImportRemotePlaylist {
+                        browse_id: c.browse_id,
+                    })
+                    .unwrap_or(ViewEffect::None),
+                _ => ViewEffect::None,
+            },
             Action::ToggleLike => self
                 .selected_track()
                 .map(ViewEffect::ToggleLike)
                 .unwrap_or(ViewEffect::None),
-            Action::ToggleSave => self.remove_or_unsave_selected(false),
+            Action::ToggleSave | Action::ToggleArtistFollow => {
+                self.remove_or_unsave_selected(false)
+            }
             Action::DeleteItem => self.remove_or_unsave_selected(true),
-            Action::StartRadio => self
+            Action::ArtistShuffle => self.shuffle_selected(),
+            Action::StartRadio => self.radio_selected(),
+            Action::CopyUrl => self
+                .selected_url()
+                .map(ViewEffect::CopyUrl)
+                .unwrap_or(ViewEffect::None),
+            _ => ViewEffect::None,
+        }
+    }
+
+    pub fn selected_user_playlist(&self) -> Option<&UserPlaylist> {
+        let q = self.filter.trim().to_lowercase();
+        self.user_playlists
+            .iter()
+            .filter(|p| q.is_empty() || p.title.to_lowercase().contains(&q))
+            .nth(self.cursor)
+    }
+
+    fn queue_selected(&self, play_next: bool) -> ViewEffect {
+        match self.active_tab {
+            LibraryTab::LikedSongs | LibraryTab::Recent => self
+                .selected_track()
+                .map(|t| {
+                    if play_next {
+                        ViewEffect::Command(AppCommand::PlayNext { tracks: vec![t] })
+                    } else {
+                        ViewEffect::Command(AppCommand::AppendTracks { tracks: vec![t] })
+                    }
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::SavedAlbums => self
+                .selected_collection()
+                .map(|c| ViewEffect::QueueAlbum {
+                    browse_id: c.browse_id,
+                    play_next,
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::SavedPlaylists => self
+                .selected_collection()
+                .map(|c| ViewEffect::QueuePlaylist {
+                    browse_id: c.browse_id,
+                    play_next,
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::UserPlaylists => self
+                .selected_user_playlist()
+                .map(|pl| ViewEffect::QueueUserPlaylist {
+                    playlist_id: pl.id.clone(),
+                    play_next,
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::SavedArtists => ViewEffect::None,
+        }
+    }
+
+    fn shuffle_selected(&self) -> ViewEffect {
+        match self.active_tab {
+            LibraryTab::UserPlaylists => self
+                .selected_user_playlist()
+                .map(|pl| ViewEffect::ShuffleUserPlaylistDirect {
+                    playlist_id: pl.id.clone(),
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::SavedAlbums => self
+                .selected_collection()
+                .map(|c| ViewEffect::ShuffleAlbumDirect {
+                    browse_id: c.browse_id,
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::SavedArtists => self
+                .selected_collection()
+                .map(|c| ViewEffect::ShuffleArtistDirect {
+                    browse_id: c.browse_id,
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::SavedPlaylists => self
+                .selected_collection()
+                .map(|c| ViewEffect::ShufflePlaylistDirect {
+                    browse_id: c.browse_id,
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::LikedSongs | LibraryTab::Recent => self.radio_selected(),
+        }
+    }
+
+    fn radio_selected(&self) -> ViewEffect {
+        match self.active_tab {
+            LibraryTab::LikedSongs | LibraryTab::Recent => self
                 .selected_track()
                 .map(|t| {
                     ViewEffect::Command(AppCommand::StartRadio {
@@ -249,20 +441,26 @@ impl LibraryView {
                     })
                 })
                 .unwrap_or(ViewEffect::None),
-            Action::CopyUrl => self
-                .selected_url()
-                .map(ViewEffect::CopyUrl)
+            LibraryTab::SavedAlbums => self
+                .selected_collection()
+                .map(|c| ViewEffect::StartAlbumRadio {
+                    browse_id: c.browse_id,
+                })
                 .unwrap_or(ViewEffect::None),
-            _ => ViewEffect::None,
+            LibraryTab::SavedArtists => self
+                .selected_collection()
+                .map(|c| ViewEffect::StartArtistRadio {
+                    browse_id: c.browse_id,
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::SavedPlaylists => self
+                .selected_collection()
+                .map(|c| ViewEffect::StartPlaylistRadio {
+                    browse_id: c.browse_id,
+                })
+                .unwrap_or(ViewEffect::None),
+            LibraryTab::UserPlaylists => ViewEffect::None,
         }
-    }
-
-    fn selected_user_playlist(&self) -> Option<&UserPlaylist> {
-        let q = self.filter.trim().to_lowercase();
-        self.user_playlists
-            .iter()
-            .filter(|p| q.is_empty() || p.title.to_lowercase().contains(&q))
-            .nth(self.cursor)
     }
 
     fn selected_track(&self) -> Option<Track> {

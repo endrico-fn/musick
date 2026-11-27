@@ -24,7 +24,7 @@ pub use player::{DiscoverTab, PlayerFocusPane, PlayerPanelMode, PlayerView};
 pub use playlist_detail::PlaylistDetailView;
 pub use playlists::{PlaylistsPane, PlaylistsView};
 pub use queue::QueueView;
-pub use settings::{SettingRow, SettingsView};
+pub use settings::{SettingRow, SettingsSection, SettingsView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TrackSortMode {
@@ -109,6 +109,11 @@ pub enum ViewEffect {
         browse_id: String,
         name_hint: String,
     },
+    OpenArtistTab {
+        browse_id: String,
+        name_hint: String,
+        tab: ArtistTab,
+    },
     OpenAlbum {
         browse_id: String,
         title_hint: String,
@@ -130,6 +135,42 @@ pub enum ViewEffect {
         browse_id: String,
     },
     PlayArtistDirect {
+        browse_id: String,
+    },
+    ShuffleAlbumDirect {
+        browse_id: String,
+    },
+    ShufflePlaylistDirect {
+        browse_id: String,
+    },
+    ShuffleArtistDirect {
+        browse_id: String,
+    },
+    ShuffleUserPlaylistDirect {
+        playlist_id: String,
+    },
+    StartArtistRadio {
+        browse_id: String,
+    },
+    StartAlbumRadio {
+        browse_id: String,
+    },
+    StartPlaylistRadio {
+        browse_id: String,
+    },
+    QueueAlbum {
+        browse_id: String,
+        play_next: bool,
+    },
+    QueuePlaylist {
+        browse_id: String,
+        play_next: bool,
+    },
+    QueueUserPlaylist {
+        playlist_id: String,
+        play_next: bool,
+    },
+    ImportRemotePlaylist {
         browse_id: String,
     },
     TriggerSearch {

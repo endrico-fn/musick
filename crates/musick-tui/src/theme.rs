@@ -1,8 +1,10 @@
+use std::cell::Cell;
+
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
-use musick_core::{IconMode, SearchItem};
+use musick_core::{IconMode, SearchItem, ThemeAccent};
 
 pub const ACCENT: Color = Color::Rgb(0x26, 0xd9, 0xb4);
 pub const BORDER: Color = Color::Rgb(0xa6, 0xa6, 0xa6);
@@ -10,15 +12,89 @@ pub const BORDER_DIM: Color = Color::Rgb(0x7c, 0x7c, 0x7c);
 pub const SCROLL_TRACK: Color = Color::Rgb(0x3a, 0x3a, 0x3a);
 pub const TEXT: Color = Color::Rgb(0xf2, 0xf2, 0xf2);
 pub const DIM: Color = Color::Rgb(0x7c, 0x7c, 0x7c);
-pub const TR_ACTIVE: Color = Color::Rgb(0x9e, 0xf5, 0xe2);
-pub const TR_UPCOMING: Color = Color::Rgb(0x7d, 0xa8, 0xa0);
-pub const TR_PAST: Color = Color::Rgb(0x55, 0x66, 0x63);
-pub const CURSOR_BG: Color = Color::Rgb(0x1f, 0x4f, 0x46);
-pub const CURSOR_BLUR_BG: Color = Color::Rgb(0x16, 0x35, 0x2f);
-pub const BTN_BG: Color = Color::Rgb(0x1d, 0x38, 0x33);
-pub const BTN_PRIMARY_FG: Color = Color::Rgb(0x08, 0x13, 0x0f);
 pub const WARN_GOLD: Color = Color::Rgb(0xe0, 0xaf, 0x68);
 pub const ERR: Color = Color::Rgb(0xe0, 0x6c, 0x75);
+
+#[derive(Debug, Clone, Copy)]
+pub struct ThemeTokens {
+    pub accent: Color,
+    pub tr_active: Color,
+    pub tr_upcoming: Color,
+    pub tr_past: Color,
+    pub cursor_bg: Color,
+    pub cursor_blur_bg: Color,
+    pub btn_bg: Color,
+    pub btn_primary_fg: Color,
+    pub cava_stops: &'static [(f32, (u8, u8, u8))],
+    pub cava_tip_rgb: (u8, u8, u8),
+}
+
+const TEAL_CAVA_STOPS: &[(f32, (u8, u8, u8))] = &[
+    (0.00, (13, 82, 71)),
+    (0.20, (18, 118, 102)),
+    (0.42, (25, 158, 134)),
+    (0.65, (38, 217, 180)),
+    (0.84, (74, 236, 202)),
+    (1.00, (148, 250, 228)),
+];
+
+const MAGENTA_CAVA_STOPS: &[(f32, (u8, u8, u8))] = &[
+    (0.00, (88, 22, 70)),
+    (0.20, (128, 32, 102)),
+    (0.42, (176, 48, 140)),
+    (0.65, (232, 74, 184)),
+    (0.84, (244, 128, 210)),
+    (1.00, (253, 196, 238)),
+];
+
+pub const TEAL_THEME: ThemeTokens = ThemeTokens {
+    accent: Color::Rgb(0x26, 0xd9, 0xb4),
+    tr_active: Color::Rgb(0x9e, 0xf5, 0xe2),
+    tr_upcoming: Color::Rgb(0x7d, 0xa8, 0xa0),
+    tr_past: Color::Rgb(0x55, 0x66, 0x63),
+    cursor_bg: Color::Rgb(0x1f, 0x4f, 0x46),
+    cursor_blur_bg: Color::Rgb(0x16, 0x35, 0x2f),
+    btn_bg: Color::Rgb(0x1d, 0x38, 0x33),
+    btn_primary_fg: Color::Rgb(0x08, 0x13, 0x0f),
+    cava_stops: TEAL_CAVA_STOPS,
+    cava_tip_rgb: (236, 255, 250),
+};
+
+pub const MAGENTA_THEME: ThemeTokens = ThemeTokens {
+    accent: Color::Rgb(0xe8, 0x4a, 0xb8),
+    tr_active: Color::Rgb(0xf7, 0xb0, 0xe2),
+    tr_upcoming: Color::Rgb(0xb3, 0x82, 0xa4),
+    tr_past: Color::Rgb(0x6b, 0x52, 0x64),
+    cursor_bg: Color::Rgb(0x4d, 0x1d, 0x3f),
+    cursor_blur_bg: Color::Rgb(0x34, 0x14, 0x2b),
+    btn_bg: Color::Rgb(0x3b, 0x1a, 0x31),
+    btn_primary_fg: Color::Rgb(0x16, 0x06, 0x12),
+    cava_stops: MAGENTA_CAVA_STOPS,
+    cava_tip_rgb: (255, 236, 250),
+};
+
+thread_local! {
+    static ACTIVE_ACCENT: Cell<ThemeAccent> = const { Cell::new(ThemeAccent::Teal) };
+}
+
+pub fn set_active_accent(accent: ThemeAccent) {
+    ACTIVE_ACCENT.with(|c| c.set(accent));
+}
+
+pub fn active_accent() -> ThemeAccent {
+    ACTIVE_ACCENT.with(Cell::get)
+}
+
+pub fn theme_for(accent: ThemeAccent) -> &'static ThemeTokens {
+    match accent {
+        ThemeAccent::Teal => &TEAL_THEME,
+        ThemeAccent::Magenta => &MAGENTA_THEME,
+    }
+}
+
+pub fn active_theme() -> &'static ThemeTokens {
+    theme_for(active_accent())
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct IconSet {
@@ -138,20 +214,25 @@ pub fn dim_style() -> Style {
 }
 
 pub fn accent_style() -> Style {
-    Style::default().fg(ACCENT).bg(Color::Reset)
+    Style::default().fg(active_theme().accent).bg(Color::Reset)
 }
 
 pub fn accent_bold_style() -> Style {
     Style::default()
-        .fg(ACCENT)
+        .fg(active_theme().accent)
         .bg(Color::Reset)
         .add_modifier(Modifier::BOLD)
 }
 
 pub fn cursor_style(focused: bool) -> Style {
+    let theme = active_theme();
     Style::default()
         .fg(TEXT)
-        .bg(if focused { CURSOR_BG } else { CURSOR_BLUR_BG })
+        .bg(if focused {
+            theme.cursor_bg
+        } else {
+            theme.cursor_blur_bg
+        })
 }
 
 pub fn panel_block<'a>(title: &'a str, subtitle: Option<&'a str>, focused: bool) -> Block<'a> {
@@ -172,8 +253,9 @@ fn build_panel_block<'a>(
     focused: bool,
     padding: Padding,
 ) -> Block<'a> {
-    let border_color = if focused { ACCENT } else { BORDER };
-    let title_color = if focused { ACCENT } else { TEXT };
+    let accent = active_theme().accent;
+    let border_color = if focused { accent } else { BORDER };
+    let title_color = if focused { accent } else { TEXT };
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
@@ -193,7 +275,7 @@ fn build_panel_block<'a>(
         block = block.title_top(
             Line::from(format!(" {sub} "))
                 .right_aligned()
-                .style(Style::default().fg(ACCENT).bg(Color::Reset)),
+                .style(Style::default().fg(accent).bg(Color::Reset)),
         );
     }
     block

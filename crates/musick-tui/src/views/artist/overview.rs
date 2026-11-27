@@ -8,7 +8,7 @@ use musick_core::{AlbumSummary, Artist, ArtistSummary, SavedCollectionKind};
 
 use crate::keymap::Action;
 use crate::text::{cell_width, trunc_cells};
-use crate::theme::{ACCENT, CURSOR_BG, CURSOR_BLUR_BG, DIM, TEXT, accent_bold_style, dim_style};
+use crate::theme::{DIM, TEXT, accent_bold_style, active_theme, dim_style};
 use crate::views::{RenderCtx, ViewEffect};
 use crate::widgets::CoverRenderer;
 
@@ -101,6 +101,20 @@ impl ArtistView {
                 },
                 None => ViewEffect::None,
             },
+            Action::PlayNext => match items.get(self.side_cursor) {
+                Some(OverviewSideItem::Release(al)) => ViewEffect::QueueAlbum {
+                    browse_id: al.browse_id.clone(),
+                    play_next: true,
+                },
+                _ => ViewEffect::None,
+            },
+            Action::AppendQueue => match items.get(self.side_cursor) {
+                Some(OverviewSideItem::Release(al)) => ViewEffect::QueueAlbum {
+                    browse_id: al.browse_id.clone(),
+                    play_next: false,
+                },
+                _ => ViewEffect::None,
+            },
             Action::ToggleSave => match items.get(self.side_cursor) {
                 Some(OverviewSideItem::Release(al)) => ViewEffect::ToggleSave {
                     kind: SavedCollectionKind::Album,
@@ -187,13 +201,18 @@ impl ArtistView {
             None
         };
 
+        let theme = active_theme();
         let mut list_start = 0usize;
         if let Some(latest) = top_releases.first()
             && y + 2 <= max_y
         {
             list_start = 1;
             let is_sel = side_focused && sel_side == Some(0);
-            let row_bg = if is_sel { CURSOR_BG } else { Color::Reset };
+            let row_bg = if is_sel {
+                theme.cursor_bg
+            } else {
+                Color::Reset
+            };
             let show_mini = covers.is_enabled() && area.width >= 18;
             let mini_w = if show_mini {
                 covers
@@ -240,11 +259,11 @@ impl ArtistView {
             frame.render_widget(
                 Paragraph::new(vec![
                     Line::from(vec![
-                        Span::styled(lead, Style::default().fg(ACCENT).bg(row_bg)),
+                        Span::styled(lead, Style::default().fg(theme.accent).bg(row_bg)),
                         Span::styled(
                             trunc_cells(&latest.title, tw.saturating_sub(lead_w)),
                             Style::default()
-                                .fg(if is_sel { ACCENT } else { TEXT })
+                                .fg(if is_sel { theme.accent } else { TEXT })
                                 .bg(row_bg)
                                 .add_modifier(Modifier::BOLD),
                         ),
@@ -261,7 +280,7 @@ impl ArtistView {
                     height: 2,
                 },
             );
-            y += 2;
+            y += if show_mini { 3 } else { 2 };
         }
 
         let mut side_idx = list_start;
@@ -272,9 +291,9 @@ impl ArtistView {
             let is_sel = sel_side == Some(side_idx);
             let bg = if is_sel {
                 if side_focused {
-                    CURSOR_BG
+                    theme.cursor_bg
                 } else {
-                    CURSOR_BLUR_BG
+                    theme.cursor_blur_bg
                 }
             } else {
                 Color::Reset
@@ -297,11 +316,15 @@ impl ArtistView {
                 },
                 bg,
                 vec![
-                    Span::styled(lead, Style::default().fg(ACCENT).bg(bg)),
+                    Span::styled(lead, Style::default().fg(theme.accent).bg(bg)),
                     Span::styled(
                         trunc_cells(&al.title, title_budget),
                         Style::default()
-                            .fg(if is_sel && side_focused { ACCENT } else { TEXT })
+                            .fg(if is_sel && side_focused {
+                                theme.accent
+                            } else {
+                                TEXT
+                            })
                             .bg(bg),
                     ),
                     Span::styled(suffix, Style::default().fg(DIM).bg(bg)),
@@ -333,9 +356,9 @@ impl ArtistView {
                 let is_sel = sel_side == Some(side_idx);
                 let bg = if is_sel {
                     if side_focused {
-                        CURSOR_BG
+                        theme.cursor_bg
                     } else {
-                        CURSOR_BLUR_BG
+                        theme.cursor_blur_bg
                     }
                 } else {
                     Color::Reset
@@ -359,13 +382,21 @@ impl ArtistView {
                         Span::styled(
                             lead,
                             Style::default()
-                                .fg(if is_sel && side_focused { ACCENT } else { DIM })
+                                .fg(if is_sel && side_focused {
+                                    theme.accent
+                                } else {
+                                    DIM
+                                })
                                 .bg(bg),
                         ),
                         Span::styled(
                             trunc_cells(&rel.name, w.saturating_sub(lead_w)),
                             Style::default()
-                                .fg(if is_sel && side_focused { ACCENT } else { TEXT })
+                                .fg(if is_sel && side_focused {
+                                    theme.accent
+                                } else {
+                                    TEXT
+                                })
                                 .bg(bg),
                         ),
                     ],

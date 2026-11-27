@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use musick_core::{
-    AppCommand, AuthMode, OAuthPollStatus, SearchItem, YoutubeTarget, extract_youtube_target,
+    AppCommand, AuthMode, OAuthPollStatus, SearchItem, Track, YoutubeTarget,
+    extract_youtube_target,
 };
 
 use crate::widgets::ActiveModal;
@@ -19,13 +20,23 @@ impl App {
                 match result {
                     Ok(feed) => {
                         self.player.set_discover_feed(feed);
-                        let cover_urls: Vec<String> = self
+                        let mut cover_urls: Vec<String> = self
                             .player
-                            .featured_items
+                            .feed
+                            .mixes
                             .iter()
                             .take(24)
-                            .filter_map(SearchItem::cover_url)
+                            .filter_map(Track::cover_url)
                             .collect();
+                        cover_urls.extend(
+                            self.player
+                                .feed
+                                .new_releases
+                                .iter()
+                                .take(24)
+                                .chain(self.player.featured_items.iter().take(24))
+                                .filter_map(SearchItem::cover_url),
+                        );
                         for url in cover_urls {
                             self.request_cover_image(url);
                         }
@@ -262,6 +273,7 @@ impl App {
                     Ok(OAuthPollStatus::Authorized(_)) => {
                         self.modal = None;
                         self.settings.privacy.auth_mode = AuthMode::OAuth;
+                        self.settings_view.secret_backend = self.services.auth.secret_backend_label();
                         let _ = self.settings.save(&self.services.paths.settings_file());
                         self.services.cache.clear_visitor_data();
                         self.services.engine.try_send(AppCommand::ApplySettings {
@@ -269,7 +281,7 @@ impl App {
                         });
                         self.set_toast("Signed in via OAuth2 — syncing library…");
                         self.trigger_sync_now();
-                        self.trigger_discover_refresh();
+                        self.trigger_discover_refresh(true);
                     }
                     Ok(_) => {}
                     Err(err) => {
@@ -286,7 +298,7 @@ impl App {
         }
     }
 
-    pub(super) fn trigger_discover_refresh(&mut self) {
+    pub(super) fn trigger_discover_refresh(&mut self, force_refresh: bool) {
         if let Some(h) = self.discover_task.take() {
             h.abort();
         }
@@ -297,7 +309,12 @@ impl App {
         let region = self.settings.display.region.clone();
         let tx = self.bg_tx.clone();
         let jh = tokio::spawn(async move {
-            let res = cat.discover_feed(&region).await.map_err(|e| e.to_string());
+            let res = if force_refresh {
+                cat.discover_feed_fresh(&region).await
+            } else {
+                cat.discover_feed(&region).await
+            }
+            .map_err(|e| e.to_string());
             let _ = tx.send(BgMsg::DiscoverLoaded {
                 gen_id,
                 result: res,

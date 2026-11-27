@@ -121,3 +121,58 @@ fn repeat_modes_undo_dedup_move_and_clear_upcoming() {
     }
     assert_eq!(undo_steps, 12);
 }
+
+#[test]
+fn spotify_ytm_enqueue_fifo_before_context_and_preserved_across_shuffle_and_move_undo() {
+    let mut q = PlayQueue::with_seed(99);
+    q.set_tracks(vec![tr("c1", 100), tr("c2", 120), tr("c3", 140)], 0);
+
+    // Enqueue (q) adds in FIFO order to user priority tier ahead of context (c2, c3)
+    q.enqueue(vec![tr("u1", 90)]);
+    q.enqueue(vec![tr("u2", 95)]);
+    // Play Next (N) inserts at the very front of the user priority tier
+    q.play_next(tr("n1", 80));
+
+    assert_eq!(
+        q.tracks()
+            .iter()
+            .map(|t| t.video_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["c1", "n1", "u1", "u2", "c2", "c3"]
+    );
+    assert_eq!(q.priority_count(), 3);
+    assert_eq!(q.role_at(1), QueueRole::Next);
+    assert_eq!(q.role_at(3), QueueRole::Next);
+    assert_eq!(q.role_at(4), QueueRole::Queued);
+
+    // Toggle shuffle ON then OFF preserves user priority tier strictly after current
+    assert!(q.toggle_shuffle());
+    assert_eq!(q.priority_count(), 3);
+    assert_eq!(q.tracks()[1].video_id, "n1");
+    assert_eq!(q.tracks()[2].video_id, "u1");
+    assert_eq!(q.tracks()[3].video_id, "u2");
+
+    assert!(!q.toggle_shuffle());
+    assert_eq!(q.priority_count(), 3);
+    assert_eq!(
+        q.tracks()
+            .iter()
+            .map(|t| t.video_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["c1", "n1", "u1", "u2", "c2", "c3"]
+    );
+
+    // Reordering via move_item pushes to undo stack so `u` restores previous order
+    assert!(q.move_item(2, 1));
+    assert_eq!(q.tracks()[1].video_id, "u1");
+    assert!(q.undo());
+    assert_eq!(q.tracks()[1].video_id, "n1");
+
+    // Promoting index cur+1 when priority_count == 0 promotes it into NEXT tier
+    let mut q2 = PlayQueue::new();
+    q2.set_tracks(vec![tr("a", 100), tr("b", 100), tr("c", 100)], 0);
+    assert_eq!(q2.priority_count(), 0);
+    assert!(q2.move_to_next(1));
+    assert_eq!(q2.priority_count(), 1);
+    assert_eq!(q2.role_at(1), QueueRole::Next);
+}

@@ -295,10 +295,6 @@ pub fn parse_playlist(playlist_id: &str, raw: &Value) -> (Playlist, Option<Strin
     (playlist, continuation)
 }
 
-pub fn parse_library_playlists(raw: &Value) -> Vec<PlaylistSummary> {
-    parse_library_playlists_with_continuation(raw).0
-}
-
 pub fn parse_library_playlists_with_continuation(
     raw: &Value,
 ) -> (Vec<PlaylistSummary>, Option<String>) {
@@ -319,10 +315,6 @@ pub fn parse_library_playlists_with_continuation(
     (out, extract_response_continuation(raw))
 }
 
-pub fn parse_library_albums(raw: &Value) -> Vec<AlbumSummary> {
-    parse_library_albums_with_continuation(raw).0
-}
-
 pub fn parse_library_albums_with_continuation(raw: &Value) -> (Vec<AlbumSummary>, Option<String>) {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -336,10 +328,6 @@ pub fn parse_library_albums_with_continuation(raw: &Value) -> (Vec<AlbumSummary>
         }
     }
     (out, extract_response_continuation(raw))
-}
-
-pub fn parse_library_artists(raw: &Value) -> Vec<ArtistSummary> {
-    parse_library_artists_with_continuation(raw).0
 }
 
 pub fn parse_library_artists_with_continuation(

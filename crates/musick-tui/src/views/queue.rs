@@ -40,8 +40,9 @@ impl QueueView {
             ("dd", "remove"),
             ("u", "undo"),
             ("D", "dedup"),
-            ("C", "clear up"),
-            ("P/f", "list/like"),
+            ("C/X", "clear up/all"),
+            ("A/a", "artist/album"),
+            ("e", "menu"),
         ]
     }
 
@@ -126,6 +127,7 @@ impl QueueView {
             Action::Undo => ViewEffect::Command(AppCommand::UndoQueue),
             Action::Deduplicate => ViewEffect::Command(AppCommand::DeduplicateQueue),
             Action::ClearUpcoming => ViewEffect::Command(AppCommand::ClearUpcomingQueue),
+            Action::ClearAllQueue => ViewEffect::Command(AppCommand::ClearQueue),
             Action::AddToPlaylist => queue
                 .tracks
                 .get(self.cursor)

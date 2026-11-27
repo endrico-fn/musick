@@ -3,6 +3,9 @@ use std::time::{Duration, Instant};
 use musick_audio::MprisService;
 use musick_core::{SavedCollectionKind, Track};
 
+use crate::views::{DiscoverTab, LibraryTab, PlayerPanelMode};
+use crate::widgets::RootTab;
+
 use super::{App, BgMsg, NavPage};
 
 impl App {
@@ -34,9 +37,23 @@ impl App {
             .search_results
             .iter()
             .take(30)
+            .chain(self.player.feed.new_releases.iter().take(24))
             .chain(self.player.featured_items.iter().take(24))
         {
             if let Some(u) = item.cover_url() {
+                urls.push(u);
+            }
+        }
+        for tr in self
+            .player
+            .feed
+            .mixes
+            .iter()
+            .take(24)
+            .chain(self.library.liked_songs.iter().take(24))
+            .chain(self.library.recent_tracks.iter().take(24))
+        {
+            if let Some(u) = tr.cover_url() {
                 urls.push(u);
             }
         }
@@ -147,7 +164,7 @@ impl App {
             .unwrap_or_default();
         self.reload_recent_plays();
 
-        let cover_urls: Vec<String> = self
+        let mut cover_urls: Vec<String> = self
             .library
             .saved_albums
             .iter()
@@ -156,6 +173,14 @@ impl App {
             .take(48)
             .filter_map(|c| c.thumb_url.clone())
             .collect();
+        cover_urls.extend(
+            self.library
+                .liked_songs
+                .iter()
+                .take(24)
+                .chain(self.library.recent_tracks.iter().take(24))
+                .filter_map(Track::cover_url),
+        );
         for url in cover_urls {
             self.request_cover_image(url);
         }
@@ -231,6 +256,127 @@ impl App {
                 }
                 _ => {}
             }
+        }
+    }
+
+    pub(super) fn ensure_visible_covers(&mut self) {
+        if !self.covers.is_enabled() {
+            return;
+        }
+        let mut urls = Vec::new();
+        let window = |cursor: usize, len: usize| -> (usize, usize) {
+            let start = cursor.saturating_sub(4);
+            let end = (cursor + 12).min(len);
+            (start, end)
+        };
+
+        if let Some(top) = self.nav_stack.last() {
+            if let NavPage::Artist(v) = top
+                && let Some(ref art) = v.artist
+            {
+                let (s, e) = window(v.cursor, art.songs.len());
+                for tr in &art.songs[s..e] {
+                    if let Some(u) = tr.cover_url() {
+                        urls.push(u);
+                    }
+                }
+            }
+        } else {
+            match self.active_tab {
+                RootTab::Player => match self.player.mode {
+                    PlayerPanelMode::Discover => match self.player.discover_tab {
+                        DiscoverTab::Mixes => {
+                            let (s, e) = window(self.player.mixes_cursor, self.player.feed.mixes.len());
+                            for tr in &self.player.feed.mixes[s..e] {
+                                if let Some(u) = tr.cover_url() {
+                                    urls.push(u);
+                                }
+                            }
+                        }
+                        DiscoverTab::NewReleases => {
+                            let (s, e) = window(
+                                self.player.new_rel_cursor,
+                                self.player.feed.new_releases.len(),
+                            );
+                            for it in &self.player.feed.new_releases[s..e] {
+                                if let Some(u) = it.cover_url() {
+                                    urls.push(u);
+                                }
+                            }
+                        }
+                        DiscoverTab::Featured => {
+                            let (s, e) = window(
+                                self.player.featured_cursor,
+                                self.player.featured_items.len(),
+                            );
+                            for it in &self.player.featured_items[s..e] {
+                                if let Some(u) = it.cover_url() {
+                                    urls.push(u);
+                                }
+                            }
+                        }
+                    },
+                    PlayerPanelMode::SearchResults => {
+                        let (s, e) =
+                            window(self.player.results_cursor, self.player.search_results.len());
+                        for it in &self.player.search_results[s..e] {
+                            if let Some(u) = it.cover_url() {
+                                urls.push(u);
+                            }
+                        }
+                    }
+                    _ => {}
+                },
+                RootTab::Library => match self.library.active_tab {
+                    LibraryTab::LikedSongs => {
+                        let (s, e) = window(self.library.cursor, self.library.liked_songs.len());
+                        for tr in &self.library.liked_songs[s..e] {
+                            if let Some(u) = tr.cover_url() {
+                                urls.push(u);
+                            }
+                        }
+                    }
+                    LibraryTab::Recent => {
+                        let (s, e) = window(self.library.cursor, self.library.recent_tracks.len());
+                        for tr in &self.library.recent_tracks[s..e] {
+                            if let Some(u) = tr.cover_url() {
+                                urls.push(u);
+                            }
+                        }
+                    }
+                    LibraryTab::SavedAlbums => {
+                        let (s, e) = window(self.library.cursor, self.library.saved_albums.len());
+                        for c in &self.library.saved_albums[s..e] {
+                            if let Some(ref u) = c.thumb_url {
+                                urls.push(u.clone());
+                            }
+                        }
+                    }
+                    LibraryTab::SavedArtists => {
+                        let (s, e) = window(self.library.cursor, self.library.saved_artists.len());
+                        for c in &self.library.saved_artists[s..e] {
+                            if let Some(ref u) = c.thumb_url {
+                                urls.push(u.clone());
+                            }
+                        }
+                    }
+                    LibraryTab::SavedPlaylists => {
+                        let (s, e) =
+                            window(self.library.cursor, self.library.saved_playlists.len());
+                        for c in &self.library.saved_playlists[s..e] {
+                            if let Some(ref u) = c.thumb_url {
+                                urls.push(u.clone());
+                            }
+                        }
+                    }
+                    LibraryTab::UserPlaylists => {}
+                },
+                _ => {}
+            }
+        }
+
+        for url in urls {
+            self.request_cover_image(url);
         }
     }
 

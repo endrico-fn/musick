@@ -3,6 +3,7 @@ mod bg;
 mod collections;
 mod effects;
 mod modals;
+mod mouse;
 mod render;
 
 use std::collections::HashSet;
@@ -11,6 +12,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use image::DynamicImage;
+use ratatui::layout::Rect;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::AbortHandle;
 
@@ -23,11 +25,14 @@ use musick_core::{
 };
 
 use crate::keymap::{InputMode, KeymapEngine};
+use crate::theme::set_active_accent;
 use crate::views::{
     AlbumView, ArtistView, LibraryView, PlayerView, PlaylistDetailView, PlaylistsView, QueueView,
     SettingsView,
 };
-use crate::widgets::{ActiveModal, BrailleSpinner, CoverRenderer, RootTab};
+use crate::widgets::{
+    ActiveModal, BrailleSpinner, CoverRenderer, PlayerBarControl, PlayerBarHitboxes, RootTab,
+};
 
 const MAX_NAV_DEPTH: usize = 12;
 const SESSION_KV_KEY: &str = "last_session_v1";
@@ -118,6 +123,13 @@ pub struct App {
     pub pending_sync: usize,
     pub should_quit: bool,
     pub status_toast: Option<(String, Instant)>,
+    pub player_bar_focused: bool,
+    pub player_bar_control: PlayerBarControl,
+
+    pub(super) player_bar_hitboxes: PlayerBarHitboxes,
+    pub(super) topbar_tab_hitboxes: Vec<(RootTab, Rect)>,
+    pub(super) dragging_seekbar: bool,
+    pub(super) dragging_volume: bool,
 
     bg_tx: mpsc::UnboundedSender<BgMsg>,
     bg_rx: mpsc::UnboundedReceiver<BgMsg>,
@@ -141,6 +153,7 @@ pub struct App {
 
 impl App {
     pub fn new(services: AppServices, settings: Settings, covers: CoverRenderer) -> Self {
+        set_active_accent(settings.display.accent);
         let (bg_tx, bg_rx) = mpsc::unbounded_channel();
         let reduced_motion = settings.display.reduced_motion;
         let snapshot = services.engine.snapshot();
@@ -150,6 +163,9 @@ impl App {
         let engine_events_rx = services.engine.subscribe_events();
         let cache_stats = services.cache.stats().unwrap_or_default();
         let pending_sync = services.sync.pending_count();
+        let secret_backend = services.auth.secret_backend_label();
+        let mut settings_view = SettingsView::new();
+        settings_view.secret_backend = secret_backend;
 
         let mut app = Self {
             services,
@@ -164,7 +180,7 @@ impl App {
             playlists: PlaylistsView::new(),
             library: LibraryView::new(),
             queue: QueueView::new(),
-            settings_view: SettingsView::new(),
+            settings_view,
             snapshot,
             position,
             queue_snap,
@@ -175,6 +191,12 @@ impl App {
             pending_sync,
             should_quit: false,
             status_toast: None,
+            player_bar_focused: false,
+            player_bar_control: PlayerBarControl::Seekbar,
+            player_bar_hitboxes: PlayerBarHitboxes::default(),
+            topbar_tab_hitboxes: Vec::new(),
+            dragging_seekbar: false,
+            dragging_volume: false,
             bg_tx,
             bg_rx,
             engine_events_rx,
@@ -224,7 +246,7 @@ impl App {
     }
 
     pub fn kick_startup_loads(&mut self) {
-        self.trigger_discover_refresh();
+        self.trigger_discover_refresh(false);
         if self.settings.privacy.save_history && self.snapshot.track.is_none() {
             if let Ok(Some(raw)) = self.services.store.get_kv(SESSION_KV_KEY)
                 && let Ok(sess) = serde_json::from_str::<SessionState>(&raw)
@@ -435,6 +457,7 @@ impl App {
         }
 
         self.sync_selected_playlist_tracks(false);
+        self.ensure_visible_covers();
     }
 
     fn sync_cava_state(&self) {

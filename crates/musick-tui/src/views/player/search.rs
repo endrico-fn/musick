@@ -1,9 +1,12 @@
-use musick_core::{AppCommand, SearchCategory, SearchItem};
+use musick_core::{SavedCollectionKind, SearchCategory, SearchItem};
 
 use crate::keymap::Action;
 use crate::views::ViewEffect;
 
-use super::discover::{activate_search_item, item_url, play_direct_item, save_effect_for_item};
+use super::discover::{
+    activate_search_item, item_url, play_direct_item, playlist_action_for_item, queue_item_effect,
+    radio_item_effect, save_effect_for_item, shuffle_item_effect,
+};
 use super::{PlayerPanelMode, PlayerView};
 
 impl PlayerView {
@@ -155,45 +158,31 @@ impl PlayerView {
                 self.results_cursor = self.search_results.len().saturating_sub(1);
                 ViewEffect::None
             }
-            Action::Activate => {
-                if let Some(item) = self.search_results.get(self.results_cursor) {
-                    activate_search_item(item, &self.search_results, self.results_cursor)
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::PlayDirect => {
-                if let Some(item) = self.search_results.get(self.results_cursor) {
-                    play_direct_item(item)
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::PlayNext => {
-                if let Some(SearchItem::Track(tr)) = self.search_results.get(self.results_cursor) {
-                    ViewEffect::Command(AppCommand::PlayNext {
-                        tracks: vec![tr.clone()],
-                    })
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::AppendQueue => {
-                if let Some(SearchItem::Track(tr)) = self.search_results.get(self.results_cursor) {
-                    ViewEffect::Command(AppCommand::AppendTracks {
-                        tracks: vec![tr.clone()],
-                    })
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::AddToPlaylist => {
-                if let Some(SearchItem::Track(tr)) = self.search_results.get(self.results_cursor) {
-                    ViewEffect::AddToPlaylistPicker(tr.clone())
-                } else {
-                    ViewEffect::None
-                }
-            }
+            Action::Activate => self
+                .search_results
+                .get(self.results_cursor)
+                .map(activate_search_item)
+                .unwrap_or(ViewEffect::None),
+            Action::PlayDirect => self
+                .search_results
+                .get(self.results_cursor)
+                .map(play_direct_item)
+                .unwrap_or(ViewEffect::None),
+            Action::PlayNext => self
+                .search_results
+                .get(self.results_cursor)
+                .map(|it| queue_item_effect(it, true))
+                .unwrap_or(ViewEffect::None),
+            Action::AppendQueue => self
+                .search_results
+                .get(self.results_cursor)
+                .map(|it| queue_item_effect(it, false))
+                .unwrap_or(ViewEffect::None),
+            Action::AddToPlaylist => self
+                .search_results
+                .get(self.results_cursor)
+                .map(playlist_action_for_item)
+                .unwrap_or(ViewEffect::None),
             Action::ToggleLike => {
                 if let Some(SearchItem::Track(tr)) = self.search_results.get(self.results_cursor) {
                     ViewEffect::ToggleLike(tr.clone())
@@ -201,24 +190,31 @@ impl PlayerView {
                     ViewEffect::None
                 }
             }
-            Action::ToggleSave => {
-                if let Some(item) = self.search_results.get(self.results_cursor) {
-                    save_effect_for_item(item)
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::StartRadio => {
-                if let Some(SearchItem::Track(tr)) = self.search_results.get(self.results_cursor) {
-                    ViewEffect::Command(AppCommand::StartRadio {
-                        video_id: Some(tr.video_id.clone()),
-                        playlist_id: None,
-                        seed_track: Some(tr.clone()),
-                    })
-                } else {
-                    ViewEffect::None
-                }
-            }
+            Action::ToggleSave => self
+                .search_results
+                .get(self.results_cursor)
+                .map(save_effect_for_item)
+                .unwrap_or(ViewEffect::None),
+            Action::ToggleArtistFollow => match self.search_results.get(self.results_cursor) {
+                Some(SearchItem::Artist(ar)) => ViewEffect::ToggleSave {
+                    kind: SavedCollectionKind::Artist,
+                    browse_id: ar.browse_id.clone(),
+                    title: ar.name.clone(),
+                    subtitle: ar.subtitle.clone(),
+                    thumb_url: ar.cover_url(),
+                },
+                _ => ViewEffect::None,
+            },
+            Action::ArtistShuffle => self
+                .search_results
+                .get(self.results_cursor)
+                .map(shuffle_item_effect)
+                .unwrap_or(ViewEffect::None),
+            Action::StartRadio => self
+                .search_results
+                .get(self.results_cursor)
+                .map(radio_item_effect)
+                .unwrap_or(ViewEffect::None),
             Action::CopyUrl => self
                 .search_results
                 .get(self.results_cursor)

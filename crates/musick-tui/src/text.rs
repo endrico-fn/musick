@@ -3,7 +3,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use musick_core::LyricLine;
 
-use crate::theme::{ACCENT, DIM, TEXT, TR_ACTIVE, TR_PAST, TR_UPCOMING};
+use crate::theme::{DIM, TEXT, active_theme};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Align {
@@ -223,18 +223,19 @@ pub fn format_lyric_row(
     if row.is_spacer {
         return (String::new(), Style::default().bg(Color::Reset));
     }
+    let theme = active_theme();
     let txt = format!("{}{}", " ".repeat(pad_left), row.text);
     let style = if row.is_translation {
         if is_active {
-            Style::default().fg(TR_ACTIVE).bg(Color::Reset)
+            Style::default().fg(theme.tr_active).bg(Color::Reset)
         } else if is_past {
-            Style::default().fg(TR_PAST).bg(Color::Reset)
+            Style::default().fg(theme.tr_past).bg(Color::Reset)
         } else {
-            Style::default().fg(TR_UPCOMING).bg(Color::Reset)
+            Style::default().fg(theme.tr_upcoming).bg(Color::Reset)
         }
     } else if is_active {
         Style::default()
-            .fg(ACCENT)
+            .fg(theme.accent)
             .bg(Color::Reset)
             .add_modifier(Modifier::BOLD)
     } else if is_past {

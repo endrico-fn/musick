@@ -208,6 +208,17 @@ pub fn extract_watch_video_id(val: &Value) -> Option<String> {
         .map(str::to_string)
 }
 
+pub fn extract_watch_playlist_id(val: &Value) -> Option<String> {
+    get_str(
+        val,
+        &["navigationEndpoint", "watchPlaylistEndpoint", "playlistId"],
+    )
+    .or_else(|| get_str(val, &["watchPlaylistEndpoint", "playlistId"]))
+    .or_else(|| get_str(val, &["navigationEndpoint", "watchEndpoint", "playlistId"]))
+    .or_else(|| get_str(val, &["watchEndpoint", "playlistId"]))
+    .map(str::to_string)
+}
+
 pub fn extract_watch_video_type(val: &Value) -> Option<String> {
     get_str(
         val,

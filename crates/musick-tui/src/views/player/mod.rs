@@ -193,47 +193,120 @@ impl PlayerView {
         self.suggest_cursor = None;
     }
 
-    pub fn hovered_track(&self) -> Option<Track> {
+    pub fn hovered_item(&self) -> Option<SearchItem> {
         match self.mode {
-            PlayerPanelMode::Discover => self.selected_discover_track(),
-            PlayerPanelMode::SearchResults => match self.search_results.get(self.results_cursor) {
-                Some(SearchItem::Track(t)) => Some(t.clone()),
-                _ => None,
+            PlayerPanelMode::Discover => match self.discover_tab {
+                DiscoverTab::Mixes => self
+                    .feed
+                    .mixes
+                    .get(self.mixes_cursor)
+                    .cloned()
+                    .map(SearchItem::Track),
+                DiscoverTab::NewReleases => self.feed.new_releases.get(self.new_rel_cursor).cloned(),
+                DiscoverTab::Featured => self.featured_items.get(self.featured_cursor).cloned(),
             },
+            PlayerPanelMode::SearchResults => self.search_results.get(self.results_cursor).cloned(),
+            _ => None,
+        }
+    }
+
+    pub fn hovered_track(&self) -> Option<Track> {
+        match self.hovered_item() {
+            Some(SearchItem::Track(t)) => Some(t),
             _ => None,
         }
     }
 
     pub fn footer_hints(&self) -> &'static [(&'static str, &'static str)] {
         match self.mode {
-            PlayerPanelMode::Discover => &[
-                ("/", "search"),
-                ("Tab", "sub-tab"),
-                ("Enter", "play/open"),
-                ("N/a", "next/queue"),
-                ("P/f/w", "list/like/save"),
-                ("L", "lyrics"),
-                ("t", "ID trans"),
-                ("?", "help"),
-            ],
+            PlayerPanelMode::Discover => match self.hovered_item() {
+                Some(SearchItem::Artist(_)) => &[
+                    ("Enter", "profile"),
+                    ("a", "albums"),
+                    ("x/r", "shuf/mix"),
+                    ("W", "follow"),
+                    ("e", "menu"),
+                    ("/", "search"),
+                    ("Q", "quit"),
+                ],
+                Some(SearchItem::Playlist(_)) => &[
+                    ("Enter", "open"),
+                    ("x/r", "shuf/mix"),
+                    ("N/q", "next/queue"),
+                    ("w/P", "save/copy"),
+                    ("e", "menu"),
+                    ("/", "search"),
+                    ("Q", "quit"),
+                ],
+                Some(SearchItem::Album(_)) => &[
+                    ("Enter", "open"),
+                    ("A", "artist"),
+                    ("x/r", "shuf/mix"),
+                    ("N/q", "next/queue"),
+                    ("w", "save"),
+                    ("e", "menu"),
+                    ("Q", "quit"),
+                ],
+                _ => &[
+                    ("/", "search"),
+                    ("Tab", "sub-tab"),
+                    ("Enter", "play"),
+                    ("N/q", "next/queue"),
+                    ("A/a", "artist/album"),
+                    ("e", "menu"),
+                    ("L", "lyrics"),
+                    ("?", "help"),
+                ],
+            },
             PlayerPanelMode::SearchInput => &[
                 ("↑↓", "pick suggest"),
                 ("Tab", "complete"),
                 ("Enter", "search"),
                 ("Esc", "cancel"),
             ],
-            PlayerPanelMode::SearchResults => &[
-                ("/", "search"),
-                ("Tab", "category"),
-                ("Enter", "play/open"),
-                ("N/a", "next/queue"),
-                ("P/f/w", "list/like/save"),
-                ("r", "radio"),
-                ("Esc", "discover"),
-            ],
+            PlayerPanelMode::SearchResults => match self.hovered_item() {
+                Some(SearchItem::Artist(_)) => &[
+                    ("Enter", "profile"),
+                    ("a", "albums"),
+                    ("x/r", "shuf/mix"),
+                    ("W", "follow"),
+                    ("e", "menu"),
+                    ("Tab", "cat"),
+                    ("Esc", "discover"),
+                ],
+                Some(SearchItem::Playlist(_)) => &[
+                    ("Enter", "open"),
+                    ("x/r", "shuf/mix"),
+                    ("N/q", "next/queue"),
+                    ("w/P", "save/copy"),
+                    ("e", "menu"),
+                    ("Tab", "cat"),
+                    ("Esc", "discover"),
+                ],
+                Some(SearchItem::Album(_)) => &[
+                    ("Enter", "open"),
+                    ("A", "artist"),
+                    ("x/r", "shuf/mix"),
+                    ("N/q", "next/queue"),
+                    ("w", "save"),
+                    ("e", "menu"),
+                    ("Esc", "discover"),
+                ],
+                _ => &[
+                    ("/", "search"),
+                    ("Tab", "category"),
+                    ("Enter", "play"),
+                    ("N/q", "next/queue"),
+                    ("A/a", "artist/album"),
+                    ("e", "menu"),
+                    ("r", "mix"),
+                    ("Esc", "discover"),
+                ],
+            },
             PlayerPanelMode::Lyrics => &[
                 ("L/Esc", "close"),
                 ("t", "ID trans"),
+                ("A/a", "artist/album"),
                 ("j k", "scroll"),
                 ("zz", "center"),
                 (", .", "offset"),

@@ -240,3 +240,38 @@ fn insert_and_modal_modes_isolate_all_global_and_vim_keys() {
         );
     }
 }
+
+#[test]
+fn quick_context_keys_q_queue_shift_q_quit_shift_a_artist_a_album_and_e_menu() {
+    let mut km = KeymapEngine::new();
+    let t0 = Instant::now();
+
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('Q')), t0),
+        Some(Action::Quit)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, ctrl('c'), t0),
+        Some(Action::Quit)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('q')), t0),
+        Some(Action::AppendQueue)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('A')), t0),
+        Some(Action::GoArtist)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('a')), t0),
+        Some(Action::GoAlbum)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('e')), t0),
+        Some(Action::OpenContextMenu)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('X')), t0),
+        Some(Action::ClearAllQueue)
+    );
+}

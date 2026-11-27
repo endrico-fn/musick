@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::auth::AuthManager;
-use crate::config::AuthMode;
+use crate::config::{AuthMode, DEFAULT_REGION};
 use crate::domain::{
     Album, AlbumSummary, Artist, ArtistSummary, DiscoverFeed, Lyrics, Playlist, PlaylistSummary,
     SearchCategory, SearchItem, Track,
@@ -29,6 +29,9 @@ pub use endpoints::{
 pub trait CatalogApi: Send + Sync {
     fn set_region(&self, _region: &str) {}
     async fn discover_feed(&self, region: &str) -> CoreResult<DiscoverFeed>;
+    async fn discover_feed_fresh(&self, region: &str) -> CoreResult<DiscoverFeed> {
+        self.discover_feed(region).await
+    }
     async fn search(
         &self,
         category: SearchCategory,
@@ -55,7 +58,6 @@ pub trait CatalogApi: Send + Sync {
         continuation: Option<&str>,
         limit: usize,
     ) -> CoreResult<RadioBatch>;
-    async fn song_related(&self, video_id: &str) -> CoreResult<Vec<SearchItem>>;
     async fn yt_lyrics(&self, video_id: &str) -> CoreResult<Option<Lyrics>>;
 
     async fn library_playlists(&self) -> CoreResult<Vec<PlaylistSummary>>;
@@ -133,7 +135,7 @@ impl InnerTubeClient {
         self.region
             .read()
             .map(|g| g.clone())
-            .unwrap_or_else(|_| "ID".to_string())
+            .unwrap_or_else(|_| DEFAULT_REGION.to_string())
     }
 
     pub(super) fn cache_scope(&self) -> String {
@@ -182,12 +184,14 @@ impl InnerTubeClient {
 
         let (ua, client_id, client_ver) = match client_kind {
             ClientKind::WebRemix => (
-                endpoints::WEB_USER_AGENT,
+                self.auth
+                    .browser_user_agent()
+                    .unwrap_or_else(|| endpoints::WEB_USER_AGENT.to_string()),
                 endpoints::WEB_REMIX_CLIENT_ID,
                 endpoints::web_remix_client_version(),
             ),
             ClientKind::AndroidMusic => (
-                endpoints::ANDROID_MUSIC_USER_AGENT,
+                endpoints::ANDROID_MUSIC_USER_AGENT.to_string(),
                 endpoints::ANDROID_MUSIC_CLIENT_ID,
                 endpoints::ANDROID_MUSIC_CLIENT_VERSION.to_string(),
             ),
@@ -196,7 +200,7 @@ impl InnerTubeClient {
         let mut req = self
             .http
             .post(&url)
-            .header("User-Agent", ua)
+            .header("User-Agent", &ua)
             .header("Accept", "*/*")
             .header("Content-Type", "application/json")
             .header("Accept-Language", "en-US,en;q=0.9")
@@ -300,7 +304,11 @@ impl CatalogApi for InnerTubeClient {
     }
 
     async fn discover_feed(&self, region: &str) -> CoreResult<DiscoverFeed> {
-        self.discover_feed_impl(region).await
+        self.discover_feed_impl(region, false).await
+    }
+
+    async fn discover_feed_fresh(&self, region: &str) -> CoreResult<DiscoverFeed> {
+        self.discover_feed_impl(region, true).await
     }
 
     async fn search(
@@ -350,10 +358,6 @@ impl CatalogApi for InnerTubeClient {
     ) -> CoreResult<RadioBatch> {
         self.radio_impl(video_id, playlist_id, continuation, limit)
             .await
-    }
-
-    async fn song_related(&self, video_id: &str) -> CoreResult<Vec<SearchItem>> {
-        self.song_related_impl(video_id).await
     }
 
     async fn yt_lyrics(&self, video_id: &str) -> CoreResult<Option<Lyrics>> {

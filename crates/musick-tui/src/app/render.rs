@@ -4,14 +4,27 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 
-use crate::theme::{BORDER, accent_bold_style, base_style, dim_style, icons_for};
+use crate::theme::{
+    BORDER, accent_bold_style, base_style, dim_style, icons_for, set_active_accent,
+};
 use crate::views::RenderCtx;
-use crate::widgets::{NowPlayingBar, RootTab, TopBar, render_modal};
+use crate::widgets::{
+    NowPlayingBar, RootTab, TopBar, compute_topbar_tab_hitboxes, render_modal,
+};
 
 use super::{App, NavPage};
 
 impl App {
     fn active_footer_hints(&self) -> &'static [(&'static str, &'static str)] {
+        if self.player_bar_focused {
+            return &[
+                ("Tab", "next ctrl"),
+                ("h/l", "scrub/move"),
+                ("Enter", "activate"),
+                ("A/a", "artist/album"),
+                ("Esc/C-w k", "back"),
+            ];
+        }
         if let Some(top) = self.nav_stack.last() {
             match top {
                 NavPage::Artist(v) => v.footer_hints(),
@@ -30,6 +43,7 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame<'_>) {
+        set_active_accent(self.settings.display.accent);
         self.covers.begin_frame();
         self.covers.set_modal_open(self.modal.is_some());
         let full = frame.area();
@@ -64,6 +78,7 @@ impl App {
         let pending_sync = self.pending_sync;
         let toast_str = self.status_toast.as_ref().map(|(s, _)| s.as_str());
 
+        self.topbar_tab_hitboxes = compute_topbar_tab_hitboxes(chunks[0], icons);
         frame.render_widget(
             TopBar {
                 active_tab: self.active_tab,
@@ -114,16 +129,15 @@ impl App {
             }
         }
 
-        frame.render_widget(
-            NowPlayingBar {
-                snapshot: &self.snapshot,
-                position: self.position,
-                icons,
-                spinner: self.spinner,
-                focused: false,
-            },
-            player_area,
-        );
+        let selected_ctrl = self.player_bar_focused.then_some(self.player_bar_control);
+        self.player_bar_hitboxes = NowPlayingBar {
+            snapshot: &self.snapshot,
+            position: self.position,
+            icons,
+            spinner: self.spinner,
+            focused: self.player_bar_focused,
+        }
+        .render_with_hitboxes(player_area, frame.buffer_mut(), selected_ctrl);
 
         let mut f_spans = Vec::new();
         if let Some(chord) = self.keymap.pending_label() {

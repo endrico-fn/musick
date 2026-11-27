@@ -8,7 +8,8 @@ use musick_core::{AppCommand, Playlist, SavedCollectionKind, Track};
 
 use crate::keymap::Action;
 use crate::text::{Align, trunc_cells, wrap_cells};
-use crate::theme::{ACCENT, DIM, TEXT, panel_block};
+use crate::theme::{DIM, TEXT, active_theme, panel_block};
+use crate::views::artist::shuffle_tracks_in_place;
 use crate::views::detail_hero::{DetailCover, render_detail_cover, split_detail_hero};
 use crate::views::{RenderCtx, TrackSortMode, ViewEffect};
 use crate::widgets::{
@@ -79,11 +80,11 @@ impl PlaylistDetailView {
         } else {
             &[
                 ("Enter/p", "play"),
-                ("/", "filter"),
-                ("o", "sort"),
-                ("N/a", "next/queue"),
+                ("x", "shuffle"),
+                ("N/q", "next/queue"),
+                ("A/a", "artist/album"),
                 ("P/f/w", "add/like/save"),
-                ("yy/Y", "copy track/list"),
+                ("e", "menu"),
                 ("Bksp", "back"),
             ]
         }
@@ -167,6 +168,18 @@ impl PlaylistDetailView {
                     return ViewEffect::Command(AppCommand::PlayTracks {
                         tracks: all_visible,
                         start_index: start,
+                        autoplay: true,
+                    });
+                }
+                ViewEffect::None
+            }
+            Action::ArtistShuffle => {
+                if !all_visible.is_empty() {
+                    let mut shuffled = all_visible;
+                    shuffle_tracks_in_place(&mut shuffled);
+                    return ViewEffect::Command(AppCommand::PlayTracks {
+                        tracks: shuffled,
+                        start_index: 0,
                         autoplay: true,
                     });
                 }
@@ -282,7 +295,7 @@ impl PlaylistDetailView {
             if let Some(ref auth) = pl.summary.author {
                 lines.push(Line::from(Span::styled(
                     trunc_cells(auth, w),
-                    Style::default().fg(ACCENT).bg(Color::Reset),
+                    Style::default().fg(active_theme().accent).bg(Color::Reset),
                 )));
             }
             let mut meta = Vec::new();

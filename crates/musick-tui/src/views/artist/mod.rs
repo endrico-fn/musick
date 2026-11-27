@@ -5,7 +5,7 @@ mod render;
 use std::cell::Cell;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use musick_core::{AlbumSummary, Artist, SavedCollectionKind, Track};
+use musick_core::{AlbumSummary, Artist, SavedCollectionKind, SearchItem, Track};
 
 use crate::views::ViewEffect;
 use crate::widgets::{ScrollState, TextInput};
@@ -94,6 +94,11 @@ impl ArtistView {
             filter_active: false,
             filter: TextInput::new(),
         }
+    }
+
+    pub fn with_tab(mut self, tab: ArtistTab) -> Self {
+        self.active_tab = tab;
+        self
     }
 
     pub fn is_insert_mode(&self) -> bool {
@@ -187,6 +192,54 @@ impl ArtistView {
         self.selected_track()
     }
 
+    pub fn hovered_item(&self) -> Option<SearchItem> {
+        let art = self.artist.as_ref()?;
+        if self.active_tab == ArtistTab::Overview
+            && self.overview_pane == ArtistOverviewPane::Side
+            && self.overview_split_active.get()
+        {
+            return match self.overview_side_items().get(self.side_cursor).cloned() {
+                Some(overview::OverviewSideItem::Release(al)) => Some(SearchItem::Album(al)),
+                Some(overview::OverviewSideItem::Similar(ar)) => Some(SearchItem::Artist(ar)),
+                None => None,
+            };
+        }
+        let q = self.filter.trim().to_lowercase();
+        match self.active_tab {
+            ArtistTab::Overview | ArtistTab::Songs | ArtistTab::Videos => {
+                self.selected_track().map(SearchItem::Track)
+            }
+            ArtistTab::Albums => self
+                .filtered_releases(false)
+                .get(self.cursor)
+                .map(|al| SearchItem::Album((*al).clone())),
+            ArtistTab::Singles => self
+                .filtered_releases(true)
+                .get(self.cursor)
+                .map(|al| SearchItem::Album((*al).clone())),
+            ArtistTab::Playlists => art
+                .playlists
+                .iter()
+                .filter(|p| {
+                    q.is_empty()
+                        || p.title.to_lowercase().contains(&q)
+                        || p.author
+                            .as_deref()
+                            .is_some_and(|a| a.to_lowercase().contains(&q))
+                })
+                .nth(self.cursor)
+                .cloned()
+                .map(SearchItem::Playlist),
+            ArtistTab::Similar => art
+                .related
+                .iter()
+                .filter(|r| q.is_empty() || r.name.to_lowercase().contains(&q))
+                .nth(self.cursor)
+                .cloned()
+                .map(SearchItem::Artist),
+        }
+    }
+
     pub fn footer_hints(&self) -> &'static [(&'static str, &'static str)] {
         if self.filter_active {
             &[("Enter", "apply filter"), ("Esc", "close filter")]
@@ -195,9 +248,9 @@ impl ArtistView {
                 ("Tab", "sub-tab"),
                 ("h/l", "pane"),
                 ("Enter/p", "open/play"),
-                ("w/W", "save/follow"),
+                ("N/q", "next/queue"),
                 ("r/x", "radio/shuf"),
-                ("i", "bio"),
+                ("e/i", "menu/bio"),
                 ("Bksp", "back"),
             ]
         } else {
@@ -205,9 +258,9 @@ impl ArtistView {
                 ("Tab", "sub-tab"),
                 ("/", "filter"),
                 ("Enter/p", "open/play"),
-                ("w/W", "save/follow"),
+                ("N/q", "next/queue"),
                 ("o/r/x", "sort/radio/shuf"),
-                ("i", "bio"),
+                ("e/i", "menu/bio"),
                 ("Bksp", "back"),
             ]
         }
@@ -286,7 +339,7 @@ fn sorted_release_indices(items: &[AlbumSummary], newest: bool) -> Vec<usize> {
     indices
 }
 
-pub(super) fn shuffle_tracks_in_place(tracks: &mut [Track]) {
+pub(crate) fn shuffle_tracks_in_place(tracks: &mut [Track]) {
     if tracks.len() <= 1 {
         return;
     }

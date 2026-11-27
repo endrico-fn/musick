@@ -10,15 +10,13 @@ use serde_json::Value;
 use crate::innertube::extract::{find_all_by_key, get_array, get_path, get_str, runs_text};
 
 pub use artist::{
-    extract_plays_from_browse, parse_artist, parse_artist_releases,
-    parse_artist_releases_with_continuation,
+    extract_plays_from_browse, parse_artist, parse_artist_releases_with_continuation,
 };
 pub use collection::{
-    parse_album, parse_library_albums, parse_library_albums_with_continuation,
-    parse_library_artists, parse_library_artists_with_continuation, parse_library_playlists,
+    parse_album, parse_library_albums_with_continuation, parse_library_artists_with_continuation,
     parse_library_playlists_with_continuation, parse_playlist, parse_playlist_edit_results,
 };
-pub use feed::parse_discover_feed;
+pub use feed::{parse_discover_feed, parse_discover_feed_pages};
 pub use items::{parse_responsive_list_item, parse_two_row_item};
 pub use search::{
     parse_search_results, parse_search_results_with_continuation, parse_spelling_hint,
@@ -109,7 +107,7 @@ pub(super) fn extract_action_continuation_token(raw: &Value) -> Option<String> {
     None
 }
 
-pub(super) fn extract_response_continuation(raw: &Value) -> Option<String> {
+pub(in crate::innertube) fn extract_response_continuation(raw: &Value) -> Option<String> {
     if let Some(tok) = extract_action_continuation_token(raw) {
         return Some(tok);
     }

@@ -8,7 +8,7 @@ use crate::domain::{
 };
 use crate::error::{CoreError, CoreResult};
 
-use super::{ClientKind, InnerTubeClient, RadioBatch, extract, parsers, search_filter_params};
+use super::{ClientKind, InnerTubeClient, RadioBatch, parsers, search_filter_params};
 
 impl InnerTubeClient {
     pub(super) async fn fetch_playlist_uncached(
@@ -107,20 +107,60 @@ impl InnerTubeClient {
         items
     }
 
-    pub(super) async fn discover_feed_impl(&self, region: &str) -> CoreResult<DiscoverFeed> {
+    pub(super) async fn discover_feed_impl(
+        &self,
+        region: &str,
+        force_refresh: bool,
+    ) -> CoreResult<DiscoverFeed> {
         let cache_key = format!("discover:{region}:{}", self.auth.account_key());
-        if let Some(cached) = self.cache.get_catalog::<DiscoverFeed>(&cache_key) {
+        if !force_refresh
+            && let Some(cached) = self.cache.get_catalog::<DiscoverFeed>(&cache_key)
+        {
             return Ok(cached);
         }
 
-        let (home_res, new_rel_res, explore_res, charts_res) = tokio::join!(
-            self.browse(
+        // fetch home first so visitorData is primed before follow-up browse requests
+        let mut home_pages = Vec::new();
+        if let Ok(first_home) = self
+            .browse(
                 "FEmusic_home",
                 None,
                 None,
                 ClientKind::WebRemix,
-                Some(region)
-            ),
+                Some(region),
+            )
+            .await
+        {
+            let mut next_cont = parsers::extract_response_continuation(&first_home);
+            home_pages.push(first_home);
+            let mut pages = 0usize;
+            while let Some(token) = next_cont.take()
+                && pages < 2
+            {
+                pages += 1;
+                match self
+                    .browse(
+                        "FEmusic_home",
+                        None,
+                        Some(&token),
+                        ClientKind::WebRemix,
+                        Some(region),
+                    )
+                    .await
+                {
+                    Ok(page_raw) => {
+                        next_cont = parsers::extract_response_continuation(&page_raw);
+                        home_pages.push(page_raw);
+                    }
+                    Err(err) => {
+                        debug!("Home feed continuation stopped early: {err}");
+                        break;
+                    }
+                }
+            }
+        }
+
+        let (new_rel_res, explore_res, charts_res) = tokio::join!(
             self.browse(
                 "FEmusic_new_releases",
                 None,
@@ -144,24 +184,73 @@ impl InnerTubeClient {
             ),
         );
 
-        let home_v = home_res.ok();
         let new_rel_v = new_rel_res.ok();
         let explore_v = explore_res.ok();
         let charts_v = charts_res.ok();
 
-        if home_v.is_none() && new_rel_v.is_none() && explore_v.is_none() && charts_v.is_none() {
+        if home_pages.is_empty()
+            && new_rel_v.is_none()
+            && explore_v.is_none()
+            && charts_v.is_none()
+        {
             return Err(CoreError::Catalog(
                 "Unable to load YouTube Music home/explore feeds".into(),
             ));
         }
 
-        let feed = parsers::parse_discover_feed(
-            home_v.as_ref(),
+        let home_refs: Vec<&serde_json::Value> = home_pages.iter().collect();
+        let mut feed = parsers::parse_discover_feed_pages(
+            &home_refs,
             new_rel_v.as_ref(),
             explore_v.as_ref(),
             charts_v.as_ref(),
         );
-        self.cache.put_catalog(&cache_key, &feed, None);
+
+        if feed.mixes.is_empty() {
+            let mix_playlist = feed
+                .playlists
+                .iter()
+                .find(|pl| {
+                    pl.browse_id.starts_with("RD")
+                        || pl.title.to_ascii_lowercase().contains("mix")
+                        || pl.title.to_ascii_lowercase().contains("supermix")
+                })
+                .or_else(|| feed.playlists.first())
+                .cloned();
+
+            if let Some(pl) = mix_playlist {
+                if pl.browse_id.starts_with("RD") {
+                    if let Ok(batch) = self.radio_impl(None, Some(&pl.browse_id), None, 25).await {
+                        feed.mixes = batch.tracks;
+                    }
+                } else if let Ok(full_pl) = self.fetch_playlist_uncached(&pl.browse_id, 25).await {
+                    feed.mixes = full_pl.tracks;
+                }
+            }
+
+            if feed.mixes.is_empty()
+                && self.auth.is_authenticated()
+                && let Ok(liked) = self.library_liked_songs_impl(1).await
+                && let Some(seed) = liked.first()
+                && let Ok(batch) = self.radio_impl(Some(&seed.video_id), None, None, 25).await
+            {
+                feed.mixes = batch.tracks;
+            }
+
+            if feed.mixes.is_empty() {
+                let mut seen = HashSet::new();
+                for item in feed.new_releases.iter().chain(feed.featured.iter()) {
+                    if let SearchItem::Track(tr) = item
+                        && seen.insert(tr.video_id.clone())
+                    {
+                        feed.mixes.push(tr.clone());
+                    }
+                }
+            }
+        }
+
+        let ttl = if feed.mixes.is_empty() { Some(60) } else { None };
+        self.cache.put_catalog(&cache_key, &feed, ttl);
         Ok(feed)
     }
 
@@ -407,41 +496,6 @@ impl InnerTubeClient {
         let (mut batch, _, _) = parsers::parse_watch_playlist(&raw);
         batch.tracks.truncate(limit);
         Ok(batch)
-    }
-
-    pub(super) async fn song_related_impl(&self, video_id: &str) -> CoreResult<Vec<SearchItem>> {
-        let mut map = serde_json::Map::new();
-        map.insert("videoId".into(), json!(video_id));
-        map.insert("isAudioOnly".into(), json!(true));
-        let raw = self
-            .post_json("next", ClientKind::WebRemix, None, map)
-            .await?;
-        let (_, _, related_id) = parsers::parse_watch_playlist(&raw);
-        let Some(rel_bid) = related_id else {
-            return Ok(Vec::new());
-        };
-        let rel_raw = self
-            .browse(&rel_bid, None, None, ClientKind::WebRemix, None)
-            .await?;
-        let mut out = Vec::new();
-        let mut carousels = Vec::new();
-        extract::find_all_by_key(&rel_raw, "musicCarouselShelfRenderer", &mut carousels);
-        for shelf in carousels {
-            if let Some(contents) = extract::get_array(shelf, &["contents"]) {
-                for c in contents {
-                    if let Some(rli) = c.get("musicResponsiveListItemRenderer")
-                        && let Some(item) = parsers::parse_responsive_list_item(rli)
-                    {
-                        out.push(item);
-                    } else if let Some(tri) = c.get("musicTwoRowItemRenderer")
-                        && let Some(item) = parsers::parse_two_row_item(tri)
-                    {
-                        out.push(item);
-                    }
-                }
-            }
-        }
-        Ok(out)
     }
 
     pub(super) async fn yt_lyrics_impl(&self, video_id: &str) -> CoreResult<Option<Lyrics>> {

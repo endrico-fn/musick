@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::text::{Align, align_cells};
-use crate::theme::{ACCENT, BORDER_DIM, CURSOR_BG, CURSOR_BLUR_BG, DIM, IconSet, TEXT};
+use crate::theme::{BORDER_DIM, DIM, IconSet, TEXT, active_theme};
 use crate::widgets::{
     BrailleSpinner, DEFAULT_SCROLLOFF, ScrollState, compute_scroll_offset, render_scrollbar,
 };
@@ -240,6 +240,7 @@ impl Widget for TrackTable<'_> {
             ),
         };
 
+        let theme = active_theme();
         for (offset, row_idx) in (scroll_start..self.rows.len())
             .take(visible_rows)
             .enumerate()
@@ -248,9 +249,9 @@ impl Widget for TrackTable<'_> {
             let is_selected = row_idx == clamped_cursor;
             let bg = if is_selected {
                 if self.focused {
-                    CURSOR_BG
+                    theme.cursor_bg
                 } else {
-                    CURSOR_BLUR_BG
+                    theme.cursor_blur_bg
                 }
             } else {
                 Color::Reset
@@ -266,7 +267,7 @@ impl Widget for TrackTable<'_> {
                 "  ".to_string()
             };
             let lead_fg = if is_selected || row.is_playing {
-                ACCENT
+                theme.accent
             } else {
                 DIM
             };
@@ -280,7 +281,7 @@ impl Widget for TrackTable<'_> {
                 let raw = row.cells.get(i).map(String::as_str).unwrap_or("");
                 let formatted = align_cells(raw, col_widths[i], col.align);
                 let fg = if row.is_playing && i == 0 {
-                    ACCENT
+                    theme.accent
                 } else if row.is_dim || i > 0 {
                     if is_selected && i == 0 { TEXT } else { DIM }
                 } else {

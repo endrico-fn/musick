@@ -5,62 +5,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use musick_audio::resample_bars;
-use musick_core::CavaPalette;
+use musick_core::ThemeAccent;
 
-use crate::theme::DIM;
+use crate::theme::{DIM, theme_for};
 
 const BLOCKS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
-
-const TEAL_STOPS: &[(f32, (u8, u8, u8))] = &[
-    (0.00, (13, 82, 71)),
-    (0.20, (18, 118, 102)),
-    (0.42, (25, 158, 134)),
-    (0.65, (38, 217, 180)),
-    (0.84, (74, 236, 202)),
-    (1.00, (148, 250, 228)),
-];
-
-const EMERALD_STOPS: &[(f32, (u8, u8, u8))] = &[
-    (0.00, (14, 76, 48)),
-    (0.25, (20, 118, 70)),
-    (0.55, (29, 185, 84)),
-    (0.82, (74, 224, 132)),
-    (1.00, (152, 248, 186)),
-];
-
-const AURORA_STOPS: &[(f32, (u8, u8, u8))] = &[
-    (0.00, (34, 62, 136)),
-    (0.28, (30, 114, 178)),
-    (0.56, (28, 174, 196)),
-    (0.82, (58, 224, 192)),
-    (1.00, (166, 252, 236)),
-];
-
-const SUNSET_STOPS: &[(f32, (u8, u8, u8))] = &[
-    (0.00, (98, 34, 86)),
-    (0.26, (164, 54, 96)),
-    (0.54, (224, 92, 82)),
-    (0.80, (246, 156, 76)),
-    (1.00, (255, 222, 148)),
-];
-
-const MONO_STOPS: &[(f32, (u8, u8, u8))] = &[
-    (0.00, (48, 54, 66)),
-    (0.30, (82, 92, 108)),
-    (0.62, (128, 142, 162)),
-    (0.85, (176, 190, 212)),
-    (1.00, (224, 234, 248)),
-];
-
-fn stops_for(palette: CavaPalette) -> &'static [(f32, (u8, u8, u8))] {
-    match palette {
-        CavaPalette::Teal => TEAL_STOPS,
-        CavaPalette::Emerald => EMERALD_STOPS,
-        CavaPalette::Aurora => AURORA_STOPS,
-        CavaPalette::Sunset => SUNSET_STOPS,
-        CavaPalette::Mono => MONO_STOPS,
-    }
-}
 
 fn smoothstep(t: f32) -> f32 {
     let x = t.clamp(0.0, 1.0);
@@ -76,8 +25,9 @@ fn lerp_rgb(c0: (u8, u8, u8), c1: (u8, u8, u8), t: f32) -> (u8, u8, u8) {
     )
 }
 
-fn gradient_color(palette: CavaPalette, ratio: f32, tip_boost: f32) -> Color {
-    let stops = stops_for(palette);
+fn gradient_color(accent: ThemeAccent, ratio: f32, tip_boost: f32) -> Color {
+    let tokens = theme_for(accent);
+    let stops = tokens.cava_stops;
     let r = ratio.clamp(0.0, 1.0);
     let mut rgb = stops[stops.len() - 1].1;
     for win in stops.windows(2) {
@@ -90,14 +40,14 @@ fn gradient_color(palette: CavaPalette, ratio: f32, tip_boost: f32) -> Color {
         }
     }
     if tip_boost > 0.0 {
-        rgb = lerp_rgb(rgb, (236, 255, 250), tip_boost);
+        rgb = lerp_rgb(rgb, tokens.cava_tip_rgb, tip_boost);
     }
     Color::Rgb(rgb.0, rgb.1, rgb.2)
 }
 
 pub struct CavaWidget<'a> {
     pub bars: &'a [f32],
-    pub palette: CavaPalette,
+    pub accent: ThemeAccent,
     pub idle: bool,
 }
 
@@ -117,7 +67,7 @@ impl Widget for CavaWidget<'_> {
         let pad_left = w.saturating_sub(total_used) / 2;
 
         let max_units = (h * 8) as f32;
-        let base_floor = gradient_color(self.palette, 0.0, 0.0);
+        let base_floor = gradient_color(self.accent, 0.0, 0.0);
         let bar_units: Vec<i32> = vals
             .iter()
             .map(|&v| (v.clamp(0.0, 1.0) * max_units).round() as i32)
@@ -146,14 +96,14 @@ impl Widget for CavaWidget<'_> {
                     let t = (0.78 * cell_mid + 0.22 * amp).clamp(0.0, 1.0);
                     (
                         BLOCKS[8],
-                        gradient_color(self.palette, t, if is_top { 0.16 * t } else { 0.0 }),
+                        gradient_color(self.accent, t, if is_top { 0.16 * t } else { 0.0 }),
                     )
                 } else {
                     let pos_t = (row_from_bottom as f32 + cell_units as f32 / 8.0) / h as f32;
                     let t = (0.72 * pos_t + 0.28 * amp).clamp(0.0, 1.0);
                     (
                         BLOCKS[cell_units as usize],
-                        gradient_color(self.palette, t, if units >= 4 { 0.16 * t } else { 0.0 }),
+                        gradient_color(self.accent, t, if units >= 4 { 0.16 * t } else { 0.0 }),
                     )
                 };
                 let bar_str = glyph.repeat(bar_w);

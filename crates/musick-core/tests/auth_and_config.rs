@@ -466,4 +466,93 @@ curl 'https://music.youtube.com/youtubei/v1/browse' \\
         assert_eq!(store.get("k").unwrap(), None);
         assert!(!file.exists());
     }
+
+    #[test]
+    fn theme_accent_defaults_to_teal_and_legacy_cava_palette_toml_loads_cleanly() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("settings.toml");
+        std::fs::write(
+            &file,
+            "[display]\ncava_palette = \"aurora\"\naccent = \"magenta\"\n",
+        )
+        .unwrap();
+        let loaded = Settings::load(&file);
+        assert_eq!(loaded.display.accent, musick_core::ThemeAccent::Magenta);
+        assert_eq!(
+            loaded.display.accent.toggle(),
+            musick_core::ThemeAccent::Teal
+        );
+        assert_eq!(Settings::default().display.accent, musick_core::ThemeAccent::Teal);
+    }
+
+    #[test]
+    fn credentials_redact_secrets_in_debug_and_reject_header_injection() {
+        let raw = "cookie: SAPISID=top_secret_val_999\nuser-agent: Mozilla/5.0 CustomChrome/134.0";
+        let creds = parse_browser_headers(raw).unwrap();
+        assert_eq!(
+            creds.user_agent.as_deref(),
+            Some("Mozilla/5.0 CustomChrome/134.0")
+        );
+        let dbg_browser = format!("{creds:?}");
+        assert!(!dbg_browser.contains("top_secret_val_999"));
+        assert!(dbg_browser.contains("[REDACTED]"));
+
+        let oauth = OAuthCredentials {
+            client_id: "cid".into(),
+            client_secret: "super_secret_client".into(),
+            access_token: "super_secret_access".into(),
+            refresh_token: "super_secret_refresh".into(),
+            expires_at: 99999,
+            scope: "yt".into(),
+            token_type: "Bearer".into(),
+            page_id: None,
+            account_label: None,
+        };
+        let dbg_oauth = format!("{oauth:?}");
+        assert!(!dbg_oauth.contains("super_secret_client"));
+        assert!(!dbg_oauth.contains("super_secret_access"));
+        assert!(!dbg_oauth.contains("super_secret_refresh"));
+
+        let prompt = OAuthDevicePrompt {
+            device_code: "secret_device_code".into(),
+            user_code: "ABCD-EFGH".into(),
+            verification_url: "https://www.google.com/device".into(),
+            expires_in: 600,
+            interval: 5,
+        };
+        let dbg_prompt = format!("{prompt:?}");
+        assert!(!dbg_prompt.contains("secret_device_code"));
+        assert!(dbg_prompt.contains("ABCD-EFGH"));
+
+        // Reject control characters and oversized cookie headers
+        assert!(parse_browser_headers("cookie: SAPISID=abc\x07def").is_err());
+        let huge = format!("cookie: SAPISID={}", "a".repeat(40_000));
+        assert!(parse_browser_headers(&huge).is_err());
+
+        // Trusted Google URL validator blocks SSRF / lookalikes / HTTP
+        use musick_core::innertube::endpoints::is_trusted_google_url;
+        assert!(is_trusted_google_url(
+            "https://s.youtube.com/api/stats/playback?docid=abc"
+        ));
+        assert!(is_trusted_google_url(
+            "https://music.youtube.com/youtubei/v1/browse"
+        ));
+        assert!(!is_trusted_google_url("http://s.youtube.com/api/stats/playback"));
+        assert!(!is_trusted_google_url("https://youtube.com@evil.com/steal"));
+        assert!(!is_trusted_google_url("https://evil-youtube.com/steal"));
+        assert!(!is_trusted_google_url("https://evil.com/?https://youtube.com"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_fallback_secret_store_rejects_symlinks() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("real.txt");
+        std::fs::write(&target, "hi").unwrap();
+        let link = dir.path().join("credentials.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let store = KeyringSecretStore::file_only(link);
+        assert!(store.set("k", "v").is_err());
+        assert!(store.get("k").is_err());
+    }
 }

@@ -85,10 +85,18 @@ impl InnerTubeClient {
             }
         };
 
+        if !endpoints::is_trusted_google_url(base_url) {
+            return Ok(());
+        }
+
+        let ua = self
+            .auth
+            .browser_user_agent()
+            .unwrap_or_else(|| endpoints::WEB_USER_AGENT.to_string());
         let req = self
             .http
             .get(base_url)
-            .header("User-Agent", endpoints::WEB_USER_AGENT)
+            .header("User-Agent", ua)
             .query(&query_pairs);
         let req = self.auth.apply_headers(req).await?;
         let _ = req.send().await?;

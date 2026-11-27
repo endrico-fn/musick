@@ -1,8 +1,8 @@
 use musick_core::{AppCommand, AuthMode};
 
 use crate::keymap::Action;
-use crate::views::ViewEffect;
-use crate::widgets::{ActiveModal, ConfirmAction};
+use crate::views::{LibraryTab, PlaylistsPane, ViewEffect};
+use crate::widgets::{ActiveModal, ConfirmAction, ContextMenuAction, RootTab};
 
 use super::{App, BgMsg};
 
@@ -131,6 +131,7 @@ impl App {
                 ..
             } => match action {
                 Action::InputCancel => {
+                    client_secret.clear();
                     self.cancel_oauth_task();
                     keep = false;
                 }
@@ -187,7 +188,10 @@ impl App {
                 active_field,
                 error,
             } => match action {
-                Action::InputCancel => keep = false,
+                Action::InputCancel => {
+                    raw_headers.clear();
+                    keep = false;
+                }
                 Action::InputTab => *active_field = (*active_field + 1) % 2,
                 Action::InputBackTab => *active_field = (*active_field + 1) % 2,
                 Action::InputChar(c) => {
@@ -212,8 +216,11 @@ impl App {
                     };
                     match self.services.auth.import_browser_headers(raw_headers, pid) {
                         Ok(creds) => {
+                            raw_headers.clear();
                             keep = false;
                             self.settings.privacy.auth_mode = AuthMode::Browser;
+                            self.settings_view.secret_backend =
+                                self.services.auth.secret_backend_label();
                             let _ = self.settings.save(&self.services.paths.settings_file());
                             self.services.cache.clear_visitor_data();
                             if let Some(vd) = creds.visitor_id.as_deref() {
@@ -224,15 +231,46 @@ impl App {
                             });
                             self.set_toast("Browser Auth imported — syncing library…");
                             self.trigger_sync_now();
-                            self.trigger_discover_refresh();
+                            self.trigger_discover_refresh(true);
                         }
                         Err(err) => *error = Some(err.to_string()),
                     }
                 }
                 _ => {}
             },
+            ActiveModal::ContextMenu { items, cursor, .. } => match action {
+                Action::InputCancel
+                | Action::InputChar('e')
+                | Action::InputChar('q')
+                | Action::InputChar('Q') => {
+                    keep = false;
+                }
+                Action::InputDown | Action::InputChar('j') => {
+                    if !items.is_empty() {
+                        *cursor = (*cursor + 1).min(items.len() - 1);
+                    }
+                }
+                Action::InputUp | Action::InputChar('k') => {
+                    *cursor = cursor.saturating_sub(1);
+                }
+                Action::InputHome | Action::InputChar('g') => *cursor = 0,
+                Action::InputEnd | Action::InputChar('G') => {
+                    *cursor = items.len().saturating_sub(1);
+                }
+                Action::InputSubmit => {
+                    let chosen = items.get(*cursor).map(|it| it.action.clone());
+                    keep = false;
+                    if let Some(act) = chosen {
+                        self.execute_context_menu_action(act);
+                    }
+                }
+                _ => {}
+            },
             ActiveModal::TextViewer { scroll, .. } => match action {
-                Action::InputCancel | Action::InputChar('i') | Action::InputChar('q') => {
+                Action::InputCancel
+                | Action::InputChar('i')
+                | Action::InputChar('q')
+                | Action::InputChar('Q') => {
                     keep = false;
                 }
                 Action::InputDown | Action::InputChar('j') => *scroll = scroll.saturating_add(1),
@@ -241,7 +279,10 @@ impl App {
                 _ => {}
             },
             ActiveModal::KeymapHelp { scroll } => match action {
-                Action::InputCancel | Action::InputChar('?') | Action::InputChar('q') => {
+                Action::InputCancel
+                | Action::InputChar('?')
+                | Action::InputChar('q')
+                | Action::InputChar('Q') => {
                     keep = false;
                 }
                 Action::InputDown | Action::InputChar('j') => *scroll = scroll.saturating_add(1),
@@ -252,6 +293,75 @@ impl App {
 
         if keep {
             self.modal = Some(modal);
+        }
+    }
+
+    fn execute_context_menu_action(&mut self, chosen: ContextMenuAction) {
+        let on_user_pl = self.nav_stack.is_empty()
+            && ((self.active_tab == RootTab::Playlists
+                && self.playlists.pane == PlaylistsPane::List)
+                || (self.active_tab == RootTab::Library
+                    && self.library.active_tab == LibraryTab::UserPlaylists));
+
+        if on_user_pl || self.active_hovered_item().is_some() {
+            let mapped = match chosen {
+                ContextMenuAction::PlayNow => Action::PlayDirect,
+                ContextMenuAction::ShufflePlay => Action::ArtistShuffle,
+                ContextMenuAction::PlayNext => Action::PlayNext,
+                ContextMenuAction::AddToQueue => Action::AppendQueue,
+                ContextMenuAction::StartRadio => Action::StartRadio,
+                ContextMenuAction::GoArtist => Action::GoArtist,
+                ContextMenuAction::GoAlbum => Action::GoAlbum,
+                ContextMenuAction::AddToPlaylist | ContextMenuAction::SaveCopyToMyPlaylists => {
+                    Action::AddToPlaylist
+                }
+                ContextMenuAction::ToggleLike => Action::ToggleLike,
+                ContextMenuAction::ToggleSave => Action::ToggleSave,
+                ContextMenuAction::ToggleArtistFollow => Action::ToggleArtistFollow,
+                ContextMenuAction::ShowArtistBio => Action::ShowArtistBio,
+                ContextMenuAction::CopyUrl => Action::CopyUrl,
+                ContextMenuAction::RemoveItem => Action::DeleteItem,
+            };
+            self.dispatch_action(mapped);
+            return;
+        }
+
+        let Some(playing) = self.snapshot.track.clone() else {
+            return;
+        };
+        match chosen {
+            ContextMenuAction::PlayNow => {
+                self.services.engine.try_send(AppCommand::TogglePause);
+            }
+            ContextMenuAction::PlayNext => {
+                self.services
+                    .engine
+                    .try_send(AppCommand::PlayNext { tracks: vec![playing] });
+            }
+            ContextMenuAction::AddToQueue => {
+                self.services.engine.try_send(AppCommand::AppendTracks {
+                    tracks: vec![playing],
+                });
+            }
+            ContextMenuAction::StartRadio | ContextMenuAction::ShufflePlay => {
+                self.services.engine.try_send(AppCommand::StartRadio {
+                    video_id: Some(playing.video_id.clone()),
+                    playlist_id: None,
+                    seed_track: Some(playing),
+                });
+            }
+            ContextMenuAction::GoArtist => self.dispatch_action(Action::GoPlayingArtist),
+            ContextMenuAction::GoAlbum => self.dispatch_action(Action::GoPlayingAlbum),
+            ContextMenuAction::AddToPlaylist => {
+                self.apply_effect(ViewEffect::AddToPlaylistPicker(playing));
+            }
+            ContextMenuAction::ToggleLike => {
+                self.apply_effect(ViewEffect::ToggleLike(playing));
+            }
+            ContextMenuAction::CopyUrl => {
+                self.apply_effect(ViewEffect::CopyUrl(playing.url()));
+            }
+            _ => {}
         }
     }
 }

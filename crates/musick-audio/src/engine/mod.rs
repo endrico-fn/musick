@@ -90,6 +90,7 @@ pub(super) enum InternalMsg {
         lyrics: Lyrics,
     },
     RadioAutofill {
+        radio_gen: u64,
         tracks: Vec<Track>,
         continuation: Option<String>,
         playlist_id: Option<String>,
@@ -138,6 +139,7 @@ pub struct PlayerEngine {
 
     pub(super) radio_playlist_id: Option<String>,
     pub(super) radio_continuation: Option<String>,
+    pub(super) radio_gen: u64,
     pub(super) radio_inflight: bool,
     pub(super) pending_autofill_advance: bool,
 
@@ -189,6 +191,7 @@ impl PlayerEngine {
             gapless_appended_video_id: None,
             radio_playlist_id: None,
             radio_continuation: None,
+            radio_gen: 0,
             radio_inflight: false,
             pending_autofill_advance: false,
             active_tracking: None,

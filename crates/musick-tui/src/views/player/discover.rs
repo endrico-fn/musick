@@ -1,9 +1,9 @@
-use musick_core::{AppCommand, SavedCollectionKind, SearchItem, Track};
+use musick_core::{AppCommand, SavedCollectionKind, SearchItem};
 
 use crate::keymap::Action;
 use crate::theme::IconSet;
 use crate::views::ViewEffect;
-use crate::widgets::{MediaListItem, TableRow};
+use crate::widgets::MediaListItem;
 
 use super::{DiscoverTab, PlayerView};
 
@@ -68,120 +68,85 @@ impl PlayerView {
                         autoplay: true,
                     })
                 }
-                DiscoverTab::NewReleases => {
-                    if let Some(item) = self.feed.new_releases.get(self.new_rel_cursor) {
-                        activate_search_item(item, &self.feed.new_releases, self.new_rel_cursor)
-                    } else {
-                        ViewEffect::None
-                    }
-                }
-                DiscoverTab::Featured => {
-                    if let Some(item) = self.featured_items.get(self.featured_cursor) {
-                        activate_search_item(item, &self.featured_items, self.featured_cursor)
-                    } else {
-                        ViewEffect::None
-                    }
-                }
+                DiscoverTab::NewReleases => self
+                    .feed
+                    .new_releases
+                    .get(self.new_rel_cursor)
+                    .map(activate_search_item)
+                    .unwrap_or(ViewEffect::None),
+                DiscoverTab::Featured => self
+                    .featured_items
+                    .get(self.featured_cursor)
+                    .map(activate_search_item)
+                    .unwrap_or(ViewEffect::None),
             },
             Action::PlayDirect => match self.discover_tab {
-                DiscoverTab::Mixes => {
-                    if let Some(tr) = self.feed.mixes.get(self.mixes_cursor) {
+                DiscoverTab::Mixes => self
+                    .feed
+                    .mixes
+                    .get(self.mixes_cursor)
+                    .map(|tr| {
                         ViewEffect::Command(AppCommand::PlayTracks {
                             tracks: vec![tr.clone()],
                             start_index: 0,
                             autoplay: true,
                         })
-                    } else {
-                        ViewEffect::None
-                    }
-                }
-                DiscoverTab::NewReleases => {
-                    if let Some(item) = self.feed.new_releases.get(self.new_rel_cursor) {
-                        play_direct_item(item)
-                    } else {
-                        ViewEffect::None
-                    }
-                }
-                DiscoverTab::Featured => {
-                    if let Some(item) = self.featured_items.get(self.featured_cursor) {
-                        play_direct_item(item)
-                    } else {
-                        ViewEffect::None
-                    }
-                }
-            },
-            Action::PlayNext => {
-                if let Some(tr) = self.selected_discover_track() {
-                    ViewEffect::Command(AppCommand::PlayNext { tracks: vec![tr] })
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::AppendQueue => {
-                if let Some(tr) = self.selected_discover_track() {
-                    ViewEffect::Command(AppCommand::AppendTracks { tracks: vec![tr] })
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::AddToPlaylist => {
-                if let Some(tr) = self.selected_discover_track() {
-                    ViewEffect::AddToPlaylistPicker(tr)
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::ToggleLike => {
-                if let Some(tr) = self.selected_discover_track() {
-                    ViewEffect::ToggleLike(tr)
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::ToggleSave => match self.discover_tab {
-                DiscoverTab::NewReleases => self
-                    .feed
-                    .new_releases
-                    .get(self.new_rel_cursor)
-                    .map(save_effect_for_item)
-                    .unwrap_or(ViewEffect::None),
-                DiscoverTab::Featured => self
-                    .featured_items
-                    .get(self.featured_cursor)
-                    .map(save_effect_for_item)
-                    .unwrap_or(ViewEffect::None),
-                DiscoverTab::Mixes => ViewEffect::None,
-            },
-            Action::StartRadio => {
-                if let Some(tr) = self.selected_discover_track() {
-                    ViewEffect::Command(AppCommand::StartRadio {
-                        video_id: Some(tr.video_id.clone()),
-                        playlist_id: None,
-                        seed_track: Some(tr),
                     })
-                } else {
-                    ViewEffect::None
-                }
-            }
-            Action::CopyUrl => match self.discover_tab {
-                DiscoverTab::Mixes => self
-                    .feed
-                    .mixes
-                    .get(self.mixes_cursor)
-                    .map(|t| ViewEffect::CopyUrl(t.url()))
                     .unwrap_or(ViewEffect::None),
                 DiscoverTab::NewReleases => self
                     .feed
                     .new_releases
                     .get(self.new_rel_cursor)
-                    .map(|it| ViewEffect::CopyUrl(item_url(it)))
+                    .map(play_direct_item)
                     .unwrap_or(ViewEffect::None),
                 DiscoverTab::Featured => self
                     .featured_items
                     .get(self.featured_cursor)
-                    .map(|it| ViewEffect::CopyUrl(item_url(it)))
+                    .map(play_direct_item)
                     .unwrap_or(ViewEffect::None),
             },
+            Action::PlayNext => self
+                .hovered_item()
+                .map(|it| queue_item_effect(&it, true))
+                .unwrap_or(ViewEffect::None),
+            Action::AppendQueue => self
+                .hovered_item()
+                .map(|it| queue_item_effect(&it, false))
+                .unwrap_or(ViewEffect::None),
+            Action::AddToPlaylist => self
+                .hovered_item()
+                .map(|it| playlist_action_for_item(&it))
+                .unwrap_or(ViewEffect::None),
+            Action::ToggleLike => self
+                .hovered_track()
+                .map(ViewEffect::ToggleLike)
+                .unwrap_or(ViewEffect::None),
+            Action::ToggleSave => self
+                .hovered_item()
+                .map(|it| save_effect_for_item(&it))
+                .unwrap_or(ViewEffect::None),
+            Action::ToggleArtistFollow => match self.hovered_item() {
+                Some(SearchItem::Artist(ar)) => ViewEffect::ToggleSave {
+                    kind: SavedCollectionKind::Artist,
+                    browse_id: ar.browse_id,
+                    title: ar.name,
+                    subtitle: ar.subtitle,
+                    thumb_url: ar.cover_url(),
+                },
+                _ => ViewEffect::None,
+            },
+            Action::ArtistShuffle => self
+                .hovered_item()
+                .map(|it| shuffle_item_effect(&it))
+                .unwrap_or(ViewEffect::None),
+            Action::StartRadio => self
+                .hovered_item()
+                .map(|it| radio_item_effect(&it))
+                .unwrap_or(ViewEffect::None),
+            Action::CopyUrl => self
+                .hovered_item()
+                .map(|it| ViewEffect::CopyUrl(item_url(&it)))
+                .unwrap_or(ViewEffect::None),
             _ => ViewEffect::None,
         }
     }
@@ -198,20 +163,6 @@ impl PlayerView {
         }
         let next = (*cur as isize + delta).clamp(0, (len - 1) as isize) as usize;
         *cur = next;
-    }
-
-    pub(super) fn selected_discover_track(&self) -> Option<Track> {
-        match self.discover_tab {
-            DiscoverTab::Mixes => self.feed.mixes.get(self.mixes_cursor).cloned(),
-            DiscoverTab::NewReleases => match self.feed.new_releases.get(self.new_rel_cursor) {
-                Some(SearchItem::Track(t)) => Some(t.clone()),
-                _ => None,
-            },
-            DiscoverTab::Featured => match self.featured_items.get(self.featured_cursor) {
-                Some(SearchItem::Track(t)) => Some(t.clone()),
-                _ => None,
-            },
-        }
     }
 }
 
@@ -291,78 +242,14 @@ pub(super) fn item_to_media_item(
     }
 }
 
-pub(super) fn item_to_table_row(
-    item: &SearchItem,
-    playing_vid: Option<&str>,
-    icons: IconSet,
-) -> TableRow {
+/// spotify / yt music standard: playing a track from search starts that song and seeds radio
+pub(super) fn activate_search_item(item: &SearchItem) -> ViewEffect {
     match item {
-        SearchItem::Track(t) => {
-            let mut r = TableRow::new(vec![t.title.clone(), t.artist_names(), t.duration_text()]);
-            r.is_playing = playing_vid == Some(t.video_id.as_str());
-            r.prefix_icon = Some(icons.icon_for_item(item));
-            r
-        }
-        SearchItem::Album(a) => {
-            let art = a
-                .artists
-                .iter()
-                .map(|x| x.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let mut r = TableRow::new(vec![
-                a.title.clone(),
-                if art.is_empty() { a.subtitle() } else { art },
-                a.year.clone().unwrap_or_else(|| a.kind.clone()),
-            ]);
-            r.prefix_icon = Some(icons.album);
-            r
-        }
-        SearchItem::Artist(a) => {
-            let mut r = TableRow::new(vec![
-                a.name.clone(),
-                a.subtitle.clone().unwrap_or_default(),
-                "Artist".to_string(),
-            ]);
-            r.prefix_icon = Some(icons.artist);
-            r
-        }
-        SearchItem::Playlist(p) => {
-            let mut r = TableRow::new(vec![
-                p.title.clone(),
-                p.author.clone().unwrap_or_default(),
-                p.count.clone().unwrap_or_else(|| "List".to_string()),
-            ]);
-            r.prefix_icon = Some(icons.playlist);
-            r
-        }
-    }
-}
-
-pub(super) fn activate_search_item(
-    item: &SearchItem,
-    all_items: &[SearchItem],
-    idx: usize,
-) -> ViewEffect {
-    match item {
-        SearchItem::Track(tr) => {
-            let tracks: Vec<Track> = all_items
-                .iter()
-                .filter_map(|it| match it {
-                    SearchItem::Track(t) => Some(t.clone()),
-                    _ => None,
-                })
-                .collect();
-            let start = tracks
-                .iter()
-                .position(|t| t.video_id == tr.video_id)
-                .unwrap_or(idx.min(tracks.len().saturating_sub(1)));
-            ViewEffect::Command(AppCommand::PlayTracks {
-                tracks,
-                start_index: start,
-                autoplay: true,
-            })
-        }
+        SearchItem::Track(tr) => ViewEffect::Command(AppCommand::PlayTracks {
+            tracks: vec![tr.clone()],
+            start_index: 0,
+            autoplay: true,
+        }),
         SearchItem::Album(al) => ViewEffect::OpenAlbum {
             browse_id: al.browse_id.clone(),
             title_hint: al.title.clone(),
@@ -394,6 +281,79 @@ pub(super) fn play_direct_item(item: &SearchItem) -> ViewEffect {
         SearchItem::Playlist(pl) => ViewEffect::PlayPlaylistDirect {
             browse_id: pl.browse_id.clone(),
         },
+    }
+}
+
+pub(super) fn queue_item_effect(item: &SearchItem, play_next: bool) -> ViewEffect {
+    match item {
+        SearchItem::Track(tr) => {
+            if play_next {
+                ViewEffect::Command(AppCommand::PlayNext {
+                    tracks: vec![tr.clone()],
+                })
+            } else {
+                ViewEffect::Command(AppCommand::AppendTracks {
+                    tracks: vec![tr.clone()],
+                })
+            }
+        }
+        SearchItem::Album(al) => ViewEffect::QueueAlbum {
+            browse_id: al.browse_id.clone(),
+            play_next,
+        },
+        SearchItem::Playlist(pl) => ViewEffect::QueuePlaylist {
+            browse_id: pl.browse_id.clone(),
+            play_next,
+        },
+        SearchItem::Artist(_) => ViewEffect::None,
+    }
+}
+
+pub(super) fn shuffle_item_effect(item: &SearchItem) -> ViewEffect {
+    match item {
+        SearchItem::Artist(ar) => ViewEffect::ShuffleArtistDirect {
+            browse_id: ar.browse_id.clone(),
+        },
+        SearchItem::Album(al) => ViewEffect::ShuffleAlbumDirect {
+            browse_id: al.browse_id.clone(),
+        },
+        SearchItem::Playlist(pl) => ViewEffect::ShufflePlaylistDirect {
+            browse_id: pl.browse_id.clone(),
+        },
+        SearchItem::Track(tr) => ViewEffect::Command(AppCommand::StartRadio {
+            video_id: Some(tr.video_id.clone()),
+            playlist_id: None,
+            seed_track: Some(tr.clone()),
+        }),
+    }
+}
+
+pub(super) fn radio_item_effect(item: &SearchItem) -> ViewEffect {
+    match item {
+        SearchItem::Track(tr) => ViewEffect::Command(AppCommand::StartRadio {
+            video_id: Some(tr.video_id.clone()),
+            playlist_id: None,
+            seed_track: Some(tr.clone()),
+        }),
+        SearchItem::Artist(ar) => ViewEffect::StartArtistRadio {
+            browse_id: ar.browse_id.clone(),
+        },
+        SearchItem::Album(al) => ViewEffect::StartAlbumRadio {
+            browse_id: al.browse_id.clone(),
+        },
+        SearchItem::Playlist(pl) => ViewEffect::StartPlaylistRadio {
+            browse_id: pl.browse_id.clone(),
+        },
+    }
+}
+
+pub(super) fn playlist_action_for_item(item: &SearchItem) -> ViewEffect {
+    match item {
+        SearchItem::Track(tr) => ViewEffect::AddToPlaylistPicker(tr.clone()),
+        SearchItem::Playlist(pl) => ViewEffect::ImportRemotePlaylist {
+            browse_id: pl.browse_id.clone(),
+        },
+        _ => ViewEffect::None,
     }
 }
 

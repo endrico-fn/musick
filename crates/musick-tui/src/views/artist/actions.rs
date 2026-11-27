@@ -178,23 +178,41 @@ impl ArtistView {
             Action::ToggleSave => self.toggle_save_hovered_or_profile(),
             Action::Activate => self.activate_item(),
             Action::PlayDirect => self.play_direct(),
-            Action::PlayNext => self
-                .selected_track()
-                .map(|t| ViewEffect::Command(AppCommand::PlayNext { tracks: vec![t] }))
-                .unwrap_or(ViewEffect::None),
-            Action::AppendQueue => self
-                .selected_track()
-                .map(|t| ViewEffect::Command(AppCommand::AppendTracks { tracks: vec![t] }))
-                .unwrap_or(ViewEffect::None),
-            Action::AddToPlaylist => self
-                .selected_track()
-                .map(ViewEffect::AddToPlaylistPicker)
-                .unwrap_or(ViewEffect::None),
+            Action::PlayNext => self.queue_hovered(true),
+            Action::AppendQueue => self.queue_hovered(false),
+            Action::AddToPlaylist => match self.hovered_item() {
+                Some(musick_core::SearchItem::Track(t)) => ViewEffect::AddToPlaylistPicker(t),
+                Some(musick_core::SearchItem::Playlist(pl)) => ViewEffect::ImportRemotePlaylist {
+                    browse_id: pl.browse_id,
+                },
+                _ => ViewEffect::None,
+            },
             Action::ToggleLike => self
                 .selected_track()
                 .map(ViewEffect::ToggleLike)
                 .unwrap_or(ViewEffect::None),
             Action::CopyUrl => ViewEffect::CopyUrl(self.selected_url()),
+            _ => ViewEffect::None,
+        }
+    }
+
+    fn queue_hovered(&self, play_next: bool) -> ViewEffect {
+        match self.hovered_item() {
+            Some(musick_core::SearchItem::Track(t)) => {
+                if play_next {
+                    ViewEffect::Command(AppCommand::PlayNext { tracks: vec![t] })
+                } else {
+                    ViewEffect::Command(AppCommand::AppendTracks { tracks: vec![t] })
+                }
+            }
+            Some(musick_core::SearchItem::Album(al)) => ViewEffect::QueueAlbum {
+                browse_id: al.browse_id,
+                play_next,
+            },
+            Some(musick_core::SearchItem::Playlist(pl)) => ViewEffect::QueuePlaylist {
+                browse_id: pl.browse_id,
+                play_next,
+            },
             _ => ViewEffect::None,
         }
     }

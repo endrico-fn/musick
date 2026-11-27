@@ -1,3 +1,5 @@
+use std::fmt;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +9,7 @@ pub const GOOGLE_DEVICE_CODE_URL: &str = "https://oauth2.googleapis.com/device/c
 pub const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 pub const YOUTUBE_OAUTH_SCOPE: &str = "https://www.googleapis.com/auth/youtube";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthCredentials {
     pub client_id: String,
     pub client_secret: String,
@@ -24,6 +26,19 @@ pub struct OAuthCredentials {
     pub account_label: Option<String>,
 }
 
+impl fmt::Debug for OAuthCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuthCredentials")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .field("access_token", &"[REDACTED]")
+            .field("refresh_token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .field("page_id", &self.page_id)
+            .finish()
+    }
+}
+
 fn default_scope() -> String {
     YOUTUBE_OAUTH_SCOPE.to_string()
 }
@@ -38,13 +53,25 @@ impl OAuthCredentials {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OAuthDevicePrompt {
     pub device_code: String,
     pub user_code: String,
     pub verification_url: String,
     pub expires_in: u64,
     pub interval: u64,
+}
+
+impl fmt::Debug for OAuthDevicePrompt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuthDevicePrompt")
+            .field("device_code", &"[REDACTED]")
+            .field("user_code", &self.user_code)
+            .field("verification_url", &self.verification_url)
+            .field("expires_in", &self.expires_in)
+            .field("interval", &self.interval)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,7 +81,7 @@ pub enum OAuthPollStatus {
     Authorized(OAuthCredentials),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenRefreshResponse {
     pub access_token: String,
     pub expires_in: u64,
@@ -64,6 +91,16 @@ pub struct TokenRefreshResponse {
     pub scope: Option<String>,
     #[serde(default)]
     pub token_type: Option<String>,
+}
+
+impl fmt::Debug for TokenRefreshResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenRefreshResponse")
+            .field("access_token", &"[REDACTED]")
+            .field("expires_in", &self.expires_in)
+            .field("has_refresh_token", &self.refresh_token.is_some())
+            .finish()
+    }
 }
 
 #[async_trait]
@@ -150,6 +187,11 @@ impl OAuthTransport for HttpOAuthTransport {
         }
 
         let raw: RawDeviceCodeResponse = resp.json().await?;
+        if !raw.verification_url.starts_with("https://") {
+            return Err(CoreError::Auth(
+                "OAuth verification_url must use https://".into(),
+            ));
+        }
         Ok(OAuthDevicePrompt {
             device_code: raw.device_code,
             user_code: raw.user_code,

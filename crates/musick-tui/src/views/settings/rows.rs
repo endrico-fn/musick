@@ -1,4 +1,4 @@
-use musick_core::{AuthMode, ImageProtocol};
+use musick_core::AuthMode;
 
 use crate::text::format_bytes;
 use crate::views::RenderCtx;
@@ -7,6 +7,78 @@ pub(super) const AUTO_SYNC_STEPS: &[u64] = &[60, 180, 300, 600, 900];
 pub(super) const CATALOG_TTL_STEPS: &[u64] = &[300, 600, 1800, 3600];
 pub(super) const IMAGE_CAP_MIB_STEPS: &[u64] = &[64, 128, 256, 512, 1024];
 pub(super) const CACHE_SECS_STEPS: &[u32] = &[15, 30, 60, 120];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsSection {
+    #[default]
+    All,
+    Account,
+    Privacy,
+    Display,
+    Player,
+    Lyrics,
+    Cache,
+}
+
+impl SettingsSection {
+    pub const ALL: &'static [Self] = &[
+        Self::All,
+        Self::Account,
+        Self::Privacy,
+        Self::Display,
+        Self::Player,
+        Self::Lyrics,
+        Self::Cache,
+    ];
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|s| *s == self).unwrap_or(0)
+    }
+
+    pub fn next(self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Account => "Account",
+            Self::Privacy => "Privacy",
+            Self::Display => "Display",
+            Self::Player => "Player",
+            Self::Lyrics => "Lyrics",
+            Self::Cache => "Cache",
+        }
+    }
+
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Account => "Acct",
+            Self::Privacy => "Priv",
+            Self::Display => "UI",
+            Self::Player => "Play",
+            Self::Lyrics => "Lyr",
+            Self::Cache => "Cache",
+        }
+    }
+
+    pub fn matches(self, row: SettingRow) -> bool {
+        match self {
+            Self::All => true,
+            Self::Account => matches!(row.group(), "Account" | "Sync"),
+            Self::Privacy => row.group() == "Privacy",
+            Self::Display => matches!(row.group(), "Display" | "Cava"),
+            Self::Player => row.group() == "Player",
+            Self::Lyrics => row.group() == "Lyrics",
+            Self::Cache => row.group() == "Cache",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingRow {
@@ -20,17 +92,12 @@ pub enum SettingRow {
     ReportPlaybackHistory,
     RemoteSuggestions,
     ClearHistory,
-    CacheEnabled,
-    CatalogTtl,
-    ImageCacheMaxMib,
-    PruneCache,
-    ClearCache,
+    ThemeAccent,
     Region,
     IconMode,
     ImageProtocol,
     ReducedMotion,
     CavaEnabled,
-    CavaPalette,
     CavaSmoothing,
     CavaAudioSource,
     AudioQuality,
@@ -45,6 +112,11 @@ pub enum SettingRow {
     LyricsSyncedOnly,
     LyricsSource,
     LyricsTranslateId,
+    CacheEnabled,
+    CatalogTtl,
+    ImageCacheMaxMib,
+    PruneCache,
+    ClearCache,
 }
 
 pub(super) const ALL_ROWS: &[SettingRow] = &[
@@ -58,17 +130,12 @@ pub(super) const ALL_ROWS: &[SettingRow] = &[
     SettingRow::ReportPlaybackHistory,
     SettingRow::RemoteSuggestions,
     SettingRow::ClearHistory,
-    SettingRow::CacheEnabled,
-    SettingRow::CatalogTtl,
-    SettingRow::ImageCacheMaxMib,
-    SettingRow::PruneCache,
-    SettingRow::ClearCache,
+    SettingRow::ThemeAccent,
     SettingRow::Region,
     SettingRow::IconMode,
     SettingRow::ImageProtocol,
     SettingRow::ReducedMotion,
     SettingRow::CavaEnabled,
-    SettingRow::CavaPalette,
     SettingRow::CavaSmoothing,
     SettingRow::CavaAudioSource,
     SettingRow::AudioQuality,
@@ -83,6 +150,11 @@ pub(super) const ALL_ROWS: &[SettingRow] = &[
     SettingRow::LyricsSyncedOnly,
     SettingRow::LyricsSource,
     SettingRow::LyricsTranslateId,
+    SettingRow::CacheEnabled,
+    SettingRow::CatalogTtl,
+    SettingRow::ImageCacheMaxMib,
+    SettingRow::PruneCache,
+    SettingRow::ClearCache,
 ];
 
 impl SettingRow {
@@ -94,15 +166,12 @@ impl SettingRow {
             | Self::ReportPlaybackHistory
             | Self::RemoteSuggestions
             | Self::ClearHistory => "Privacy",
-            Self::CacheEnabled
-            | Self::CatalogTtl
-            | Self::ImageCacheMaxMib
-            | Self::PruneCache
-            | Self::ClearCache => "Cache",
-            Self::Region | Self::IconMode | Self::ImageProtocol | Self::ReducedMotion => "Display",
-            Self::CavaEnabled | Self::CavaPalette | Self::CavaSmoothing | Self::CavaAudioSource => {
-                "Cava"
-            }
+            Self::ThemeAccent
+            | Self::Region
+            | Self::IconMode
+            | Self::ImageProtocol
+            | Self::ReducedMotion => "Display",
+            Self::CavaEnabled | Self::CavaSmoothing | Self::CavaAudioSource => "Cava",
             Self::AudioQuality
             | Self::NormalizeAudio
             | Self::Autoplay
@@ -115,6 +184,11 @@ impl SettingRow {
             | Self::LyricsSyncedOnly
             | Self::LyricsSource
             | Self::LyricsTranslateId => "Lyrics",
+            Self::CacheEnabled
+            | Self::CatalogTtl
+            | Self::ImageCacheMaxMib
+            | Self::PruneCache
+            | Self::ClearCache => "Cache",
         }
     }
 
@@ -130,17 +204,12 @@ impl SettingRow {
             Self::ReportPlaybackHistory => "Report Playback Telemetry to YTM Algorithm",
             Self::RemoteSuggestions => "Remote Search Autocomplete Suggestions",
             Self::ClearHistory => "Clear Local Play & Search History",
-            Self::CacheEnabled => "Enable L1 + L2 Cache (Covers · Lyrics · Catalog)",
-            Self::CatalogTtl => "Catalog Cache TTL",
-            Self::ImageCacheMaxMib => "Image Disk Cache Budget",
-            Self::PruneCache => "Run Cache Janitor (Prune Expired & Over-Budget)",
-            Self::ClearCache => "Clear All Disk Cache & Rotate visitorData",
+            Self::ThemeAccent => "Global Theme Accent",
             Self::Region => "YouTube Music Region",
             Self::IconMode => "Icon Glyph Set",
             Self::ImageProtocol => "Cover Image Protocol",
             Self::ReducedMotion => "Reduced Motion (Static ⣿ Spinner & Cava)",
             Self::CavaEnabled => "Enable Cava Spectrum Visualizer",
-            Self::CavaPalette => "Cava Color Palette",
             Self::CavaSmoothing => "Cava Smoothing Curve",
             Self::CavaAudioSource => "Cava Audio Source",
             Self::AudioQuality => "Audio Stream Quality",
@@ -155,6 +224,11 @@ impl SettingRow {
             Self::LyricsSyncedOnly => "Synced Lyrics Only",
             Self::LyricsSource => "Lyrics Source Priority",
             Self::LyricsTranslateId => "Auto-Translate Lyrics to Indonesian",
+            Self::CacheEnabled => "Enable L1 + L2 Cache (Covers · Lyrics · Catalog)",
+            Self::CatalogTtl => "Catalog Cache TTL",
+            Self::ImageCacheMaxMib => "Image Disk Cache Budget",
+            Self::PruneCache => "Run Cache Janitor (Prune Expired & Over-Budget)",
+            Self::ClearCache => "Clear All Disk Cache & Rotate visitorData",
         }
     }
 
@@ -186,27 +260,15 @@ impl SettingRow {
                 "Fetch live search autocomplete suggestions from YouTube Music."
             }
             Self::ClearHistory => "Erase local play history and search history immediately.",
-            Self::CacheEnabled => {
-                "Toggle in-memory L1 and SQLite/disk L2 caching for catalog, lyrics, and covers."
-            }
-            Self::CatalogTtl => {
-                "How long search, Discover, artist, album, and playlist responses stay cached."
-            }
-            Self::ImageCacheMaxMib => {
-                "Maximum disk space for cached cover artwork before LRU pruning kicks in."
-            }
-            Self::PruneCache => {
-                "Immediately evict expired entries and enforce configured cache budgets."
-            }
-            Self::ClearCache => {
-                "Delete all cached covers, lyrics, and catalog data and rotate visitorData."
+            Self::ThemeAccent => {
+                "Global accent color applied across the interface and Cava visualizer (Teal default or Magenta)."
             }
             Self::Region => {
                 "Country code for Discover mixes, charts, and localized YouTube Music catalog."
             }
             Self::IconMode => "Switch between clean Unicode glyphs and Nerd Font icons.",
             Self::ImageProtocol => {
-                "Choose terminal artwork protocol (Auto, Kitty, Sixel, Halfblock, or Off to collapse cover panels)."
+                "Terminal artwork mode: Auto (compact fallback if unsupported), Kitty, Sixel, Halfblock, or Off."
             }
             Self::ReducedMotion => {
                 "Disable animated spinners and live Cava bars for low-motion terminals."
@@ -214,7 +276,6 @@ impl SettingRow {
             Self::CavaEnabled => {
                 "Show real-time audio spectrum bars in the Player view using cava."
             }
-            Self::CavaPalette => "Color gradient palette for the Cava audio visualizer.",
             Self::CavaSmoothing => "Responsiveness vs. smoothness curve for Cava spectrum bars.",
             Self::CavaAudioSource => {
                 "Select Auto detection, direct PipeWire capture, or PulseAudio default sink monitor."
@@ -250,6 +311,21 @@ impl SettingRow {
             }
             Self::LyricsTranslateId => {
                 "Automatically translate non-Indonesian lyrics to Bahasa Indonesia."
+            }
+            Self::CacheEnabled => {
+                "Toggle in-memory L1 and SQLite/disk L2 caching for catalog, lyrics, and covers."
+            }
+            Self::CatalogTtl => {
+                "How long search, Discover, artist, album, and playlist responses stay cached."
+            }
+            Self::ImageCacheMaxMib => {
+                "Maximum disk space for cached cover artwork before LRU pruning kicks in."
+            }
+            Self::PruneCache => {
+                "Immediately evict expired entries and enforce configured cache budgets."
+            }
+            Self::ClearCache => {
+                "Delete all cached covers, lyrics, and catalog data and rotate visitorData."
             }
         }
     }
@@ -293,7 +369,7 @@ pub(super) fn format_setting_value(row: SettingRow, ctx: &RenderCtx<'_>) -> (Str
             if ctx.syncing {
                 ctx.spinner.inline_text("Syncing")
             } else if !ctx.auth_mode.is_authenticated() {
-                "Anonymous (off)".to_string()
+                "Anonymous (Off)".to_string()
             } else {
                 format!("{} pending", ctx.pending_sync)
             },
@@ -318,6 +394,34 @@ pub(super) fn format_setting_value(row: SettingRow, ctx: &RenderCtx<'_>) -> (Str
         ),
         SettingRow::RemoteSuggestions => (chk(s.privacy.remote_suggestions).to_string(), false),
         SettingRow::ClearHistory => ("[Clear]".to_string(), false),
+        SettingRow::ThemeAccent => (s.display.accent.label().to_string(), false),
+        SettingRow::Region => (s.display.region.clone(), false),
+        SettingRow::IconMode => (s.display.icons.label().to_string(), false),
+        SettingRow::ImageProtocol => (s.display.image_protocol.label().to_string(), false),
+        SettingRow::ReducedMotion => (chk(s.display.reduced_motion).to_string(), false),
+        SettingRow::CavaEnabled => (chk(s.display.cava_enabled).to_string(), false),
+        SettingRow::CavaSmoothing => (
+            s.display.cava_smoothing.label().to_string(),
+            !s.display.cava_enabled,
+        ),
+        SettingRow::CavaAudioSource => (
+            s.display.cava_audio_source.label().to_string(),
+            !s.display.cava_enabled,
+        ),
+        SettingRow::AudioQuality => (s.player.audio_quality.label().to_string(), false),
+        SettingRow::NormalizeAudio => (chk(s.player.normalize_audio).to_string(), false),
+        SettingRow::Autoplay => (chk(s.player.autoplay).to_string(), false),
+        SettingRow::Gapless => (chk(s.player.gapless).to_string(), false),
+        SettingRow::Prefetch => (chk(s.player.prefetch).to_string(), false),
+        SettingRow::CacheSecs => (format!("{}s", s.player.cache_secs), false),
+        SettingRow::UseMpvConfig => (chk(s.player.use_mpv_config).to_string(), false),
+        SettingRow::MprisEnabled => (chk(s.player.mpris_enabled).to_string(), false),
+        SettingRow::LyricsEnabled => (chk(s.lyrics.enabled).to_string(), false),
+        SettingRow::LyricsSyncedOnly => (chk(s.lyrics.synced_only).to_string(), !s.lyrics.enabled),
+        SettingRow::LyricsSource => (s.lyrics.source.label().to_string(), !s.lyrics.enabled),
+        SettingRow::LyricsTranslateId => {
+            (chk(s.lyrics.translate_to_id).to_string(), !s.lyrics.enabled)
+        }
         SettingRow::CacheEnabled => (
             format!(
                 "{} ({}, {} imgs)",
@@ -336,43 +440,6 @@ pub(super) fn format_setting_value(row: SettingRow, ctx: &RenderCtx<'_>) -> (Str
         }
         SettingRow::PruneCache => ("[Prune Now]".to_string(), false),
         SettingRow::ClearCache => ("[Clear Cache]".to_string(), false),
-        SettingRow::Region => (s.display.region.clone(), false),
-        SettingRow::IconMode => (format!("{:?}", s.display.icons), false),
-        SettingRow::ImageProtocol => (
-            match s.display.image_protocol {
-                ImageProtocol::Off => "Off (No Images)".to_string(),
-                other => format!("{other:?}"),
-            },
-            false,
-        ),
-        SettingRow::ReducedMotion => (chk(s.display.reduced_motion).to_string(), false),
-        SettingRow::CavaEnabled => (chk(s.display.cava_enabled).to_string(), false),
-        SettingRow::CavaPalette => (
-            format!("{:?}", s.display.cava_palette),
-            !s.display.cava_enabled,
-        ),
-        SettingRow::CavaSmoothing => (
-            format!("{:?}", s.display.cava_smoothing),
-            !s.display.cava_enabled,
-        ),
-        SettingRow::CavaAudioSource => (
-            s.display.cava_audio_source.label().to_string(),
-            !s.display.cava_enabled,
-        ),
-        SettingRow::AudioQuality => (s.player.audio_quality.as_str().to_string(), false),
-        SettingRow::NormalizeAudio => (chk(s.player.normalize_audio).to_string(), false),
-        SettingRow::Autoplay => (chk(s.player.autoplay).to_string(), false),
-        SettingRow::Gapless => (chk(s.player.gapless).to_string(), false),
-        SettingRow::Prefetch => (chk(s.player.prefetch).to_string(), false),
-        SettingRow::CacheSecs => (format!("{}s", s.player.cache_secs), false),
-        SettingRow::UseMpvConfig => (chk(s.player.use_mpv_config).to_string(), false),
-        SettingRow::MprisEnabled => (chk(s.player.mpris_enabled).to_string(), false),
-        SettingRow::LyricsEnabled => (chk(s.lyrics.enabled).to_string(), false),
-        SettingRow::LyricsSyncedOnly => (chk(s.lyrics.synced_only).to_string(), !s.lyrics.enabled),
-        SettingRow::LyricsSource => (s.lyrics.source.as_str().to_string(), !s.lyrics.enabled),
-        SettingRow::LyricsTranslateId => {
-            (chk(s.lyrics.translate_to_id).to_string(), !s.lyrics.enabled)
-        }
     }
 }
 

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::CoreResult;
 use crate::paths::atomic_write_text;
 
+pub const DEFAULT_REGION: &str = "ID";
 pub const VALID_REGIONS: &[&str] = &["ID", "US", "GB", "JP", "KR", "ZZ"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -39,6 +40,15 @@ pub enum IconMode {
     Nerd,
 }
 
+impl IconMode {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unicode => "Unicode",
+            Self::Nerd => "Nerd Font",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageProtocol {
@@ -53,15 +63,40 @@ pub enum ImageProtocol {
     Off,
 }
 
+impl ImageProtocol {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Kitty => "Kitty",
+            Self::Sixel => "Sixel",
+            Self::Halfblock => "Halfblock",
+            Self::Off => "Off (Compact)",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum CavaPalette {
+pub enum ThemeAccent {
     #[default]
     Teal,
-    Emerald,
-    Aurora,
-    Sunset,
-    Mono,
+    Magenta,
+}
+
+impl ThemeAccent {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Teal => "Teal",
+            Self::Magenta => "Magenta",
+        }
+    }
+
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Teal => Self::Magenta,
+            Self::Magenta => Self::Teal,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -71,6 +106,16 @@ pub enum CavaSmoothing {
     Smooth,
     Balanced,
     Crisp,
+}
+
+impl CavaSmoothing {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Smooth => "Smooth",
+            Self::Balanced => "Balanced",
+            Self::Crisp => "Crisp",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -111,6 +156,14 @@ impl AudioQuality {
             Self::Saver => "saver",
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Best => "Best",
+            Self::Balanced => "Balanced",
+            Self::Saver => "Saver",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -130,6 +183,14 @@ impl LyricsSource {
             Self::Lrclib => "lrclib",
         }
     }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Youtube => "YouTube",
+            Self::Lrclib => "LRCLIB",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -137,7 +198,7 @@ fn default_true() -> bool {
 }
 
 fn default_region() -> String {
-    "ID".to_string()
+    DEFAULT_REGION.to_string()
 }
 
 fn default_cache_secs() -> u32 {
@@ -242,6 +303,7 @@ impl Default for CacheSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DisplaySettings {
+    pub accent: ThemeAccent,
     pub icons: IconMode,
     pub image_protocol: ImageProtocol,
     #[serde(default = "default_region")]
@@ -249,7 +311,6 @@ pub struct DisplaySettings {
     pub reduced_motion: bool,
     #[serde(default = "default_true")]
     pub cava_enabled: bool,
-    pub cava_palette: CavaPalette,
     pub cava_smoothing: CavaSmoothing,
     pub cava_audio_source: CavaAudioSource,
 }
@@ -257,12 +318,12 @@ pub struct DisplaySettings {
 impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
+            accent: ThemeAccent::Teal,
             icons: IconMode::Unicode,
             image_protocol: ImageProtocol::Auto,
             region: default_region(),
             reduced_motion: false,
             cava_enabled: true,
-            cava_palette: CavaPalette::Teal,
             cava_smoothing: CavaSmoothing::Smooth,
             cava_audio_source: CavaAudioSource::Auto,
         }

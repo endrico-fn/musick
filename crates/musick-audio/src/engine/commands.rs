@@ -10,17 +10,28 @@ impl PlayerEngine {
                 start_index,
                 autoplay,
             } => {
+                self.radio_gen += 1;
+                self.radio_inflight = false;
                 self.radio_continuation = None;
                 self.radio_playlist_id = None;
+                self.snapshot.radio_active = false;
                 self.snapshot.autoplay_active = autoplay && self.settings.player.autoplay;
                 self.queue.set_tracks(tracks, start_index);
                 self.publish_queue();
                 if let Some(cur) = self.queue.current().cloned() {
                     self.load_track(cur, false).await;
+                    if self.snapshot.autoplay_active && self.queue.upcoming_tracks().is_empty() {
+                        self.maybe_autofill_radio().await;
+                    }
                 }
             }
             AppCommand::PlayNext { tracks } => {
+                if tracks.is_empty() {
+                    return;
+                }
                 let was_empty = self.queue.is_empty();
+                let count = tracks.len();
+                let first_title = tracks.first().map(|t| t.title.clone());
                 self.queue.play_next_many(tracks);
                 self.invalidate_gapless_tail().await;
                 self.publish_queue();
@@ -28,16 +39,38 @@ impl PlayerEngine {
                     self.load_track(cur, false).await;
                 } else {
                     self.schedule_prefetch_and_gapless();
+                    let msg = if count == 1
+                        && let Some(title) = first_title
+                    {
+                        format!("Playing next: {title}")
+                    } else {
+                        format!("Playing {count} tracks next")
+                    };
+                    let _ = self.events_tx.send(PlayerEvent::StatusToast(msg));
                 }
             }
             AppCommand::AppendTracks { tracks } => {
+                if tracks.is_empty() {
+                    return;
+                }
                 let was_empty = self.queue.is_empty();
-                self.queue.append(tracks);
+                let count = tracks.len();
+                let first_title = tracks.first().map(|t| t.title.clone());
+                self.queue.enqueue(tracks);
+                self.invalidate_gapless_tail().await;
                 self.publish_queue();
                 if was_empty && let Some(cur) = self.queue.current().cloned() {
                     self.load_track(cur, false).await;
                 } else {
                     self.schedule_prefetch_and_gapless();
+                    let msg = if count == 1
+                        && let Some(title) = first_title
+                    {
+                        format!("Added to queue: {title}")
+                    } else {
+                        format!("Added {count} tracks to queue")
+                    };
+                    let _ = self.events_tx.send(PlayerEvent::StatusToast(msg));
                 }
             }
             AppCommand::StartRadio {
@@ -350,13 +383,37 @@ impl PlayerEngine {
                     self.invalidate_gapless_tail().await;
                     self.publish_queue();
                     self.schedule_prefetch_and_gapless();
+                    let _ = self
+                        .events_tx
+                        .send(PlayerEvent::StatusToast("Moved to play next".into()));
                 }
             }
             AppCommand::UndoQueue => {
+                let prev_vid = self.snapshot.track.as_ref().map(|t| t.video_id.clone());
                 if self.queue.undo() {
                     self.invalidate_gapless_tail().await;
                     self.publish_queue();
-                    self.schedule_prefetch_and_gapless();
+                    match self.queue.current().cloned() {
+                        Some(cur) if prev_vid.as_deref() != Some(cur.video_id.as_str()) => {
+                            self.load_track(cur, false).await;
+                        }
+                        None if prev_vid.is_some() => {
+                            self.cancel_inflight_loads();
+                            self.load_gen += 1;
+                            let _ = self.backend.stop_track().await;
+                            self.snapshot.track = None;
+                            self.snapshot.playing = false;
+                            self.snapshot.resolving = false;
+                            self.snapshot.restored = false;
+                            self.position.buffering = false;
+                            let _ = self.pos_tx.send(self.position);
+                            self.publish_snapshot();
+                        }
+                        _ => self.schedule_prefetch_and_gapless(),
+                    }
+                    let _ = self
+                        .events_tx
+                        .send(PlayerEvent::StatusToast("Undid queue change".into()));
                 }
             }
             AppCommand::DeduplicateQueue => {
@@ -372,13 +429,22 @@ impl PlayerEngine {
             AppCommand::ClearUpcomingQueue => {
                 let removed = self.queue.clear_upcoming();
                 if removed > 0 {
+                    self.radio_gen += 1;
+                    self.radio_inflight = false;
                     self.invalidate_gapless_tail().await;
                     self.publish_queue();
+                    let _ = self.events_tx.send(PlayerEvent::StatusToast(format!(
+                        "Cleared {removed} upcoming track(s)"
+                    )));
                 }
             }
             AppCommand::ClearQueue => {
                 self.cancel_inflight_loads();
                 self.load_gen += 1;
+                self.radio_gen += 1;
+                self.radio_inflight = false;
+                self.radio_continuation = None;
+                self.radio_playlist_id = None;
                 self.queue.clear();
                 self.invalidate_gapless_tail().await;
                 let _ = self.backend.stop_track().await;
@@ -391,12 +457,16 @@ impl PlayerEngine {
                 self.snapshot.lyrics_offset_secs = 0.0;
                 self.snapshot.restored = false;
                 self.snapshot.autoplay_active = false;
+                self.snapshot.radio_active = false;
                 self.snapshot.error = None;
                 self.pending_restore_seek = None;
                 self.position = PositionTick::default();
                 let _ = self.pos_tx.send(self.position);
                 self.publish_queue();
                 self.publish_lyrics(None, Lyrics::default());
+                let _ = self
+                    .events_tx
+                    .send(PlayerEvent::StatusToast("Queue cleared".into()));
             }
             AppCommand::ToggleLyricsTranslation => {
                 self.snapshot.show_translation = !self.snapshot.show_translation;

@@ -131,66 +131,65 @@ impl LibraryView {
                 );
             }
             LibraryTab::LikedSongs | LibraryTab::Recent => {
-                let list = if self.active_tab == LibraryTab::LikedSongs {
+                let is_liked = self.active_tab == LibraryTab::LikedSongs;
+                let list = if is_liked {
                     &self.liked_songs
                 } else {
                     &self.recent_tracks
                 };
-                let rows: Vec<TableRow> = list
+                let glyph = if is_liked {
+                    ctx.icons.liked
+                } else {
+                    ctx.icons.song
+                };
+                let items: Vec<MediaListItem> = list
                     .iter()
                     .filter(|t| Self::matches_track(t, &q))
                     .map(|t| {
-                        let mut r = TableRow::new(vec![
-                            t.title.clone(),
-                            t.artist_names(),
-                            t.duration_text(),
-                        ]);
-                        r.is_playing = playing_vid == Some(t.video_id.as_str());
-                        r.prefix_icon = Some(if self.active_tab == LibraryTab::LikedSongs {
-                            ctx.icons.liked
-                        } else {
-                            ctx.icons.song
+                        let mut sub = t.artist_names();
+                        if let Some(ref alb) = t.album
+                            && !alb.is_empty()
+                            && !alb.eq_ignore_ascii_case(&t.title)
+                        {
+                            sub = format!("{sub} · {alb}");
+                        }
+                        let meta_top = t.plays.clone().unwrap_or_else(|| {
+                            if is_liked {
+                                ctx.icons.liked.to_string()
+                            } else {
+                                String::new()
+                            }
                         });
-                        r
+                        MediaListItem {
+                            title: t.title.clone(),
+                            subtitle: sub,
+                            meta_top,
+                            meta_bottom: t.duration_text(),
+                            cover_url: t.cover_url(),
+                            glyph,
+                            is_playing: playing_vid == Some(t.video_id.as_str()),
+                            is_dim: !t.is_available,
+                        }
                     })
                     .collect();
-                let cols = [
-                    ColumnDef {
-                        title: "Title",
-                        fixed_width: None,
-                        align: Align::Left,
-                    },
-                    ColumnDef {
-                        title: "Artist",
-                        fixed_width: Some(20),
-                        align: Align::Left,
-                    },
-                    ColumnDef {
-                        title: "Time",
-                        fixed_width: Some(6),
-                        align: Align::Right,
-                    },
-                ];
-                let empty = if self.active_tab == LibraryTab::LikedSongs {
+                let empty = if is_liked {
                     "No liked songs yet — press f on any song to like it"
                 } else {
                     "No recent plays yet (enable Save History in Settings to persist across restarts)"
                 };
-                frame.render_widget(
-                    TrackTable {
-                        columns: &cols,
-                        rows: &rows,
-                        cursor: self.cursor,
-                        scroll: Some(&self.scroll),
-                        focused: true,
-                        show_header: true,
-                        loading: false,
-                        loading_label: "",
-                        empty_text: empty,
-                        icons: ctx.icons,
-                        spinner: ctx.spinner,
-                    },
+                render_media_list(
+                    frame,
                     body_rect,
+                    &items,
+                    self.cursor,
+                    Some(&self.scroll),
+                    true,
+                    false,
+                    "",
+                    empty,
+                    ctx.icons,
+                    ctx.spinner,
+                    covers,
                 );
             }
             LibraryTab::SavedAlbums | LibraryTab::SavedArtists | LibraryTab::SavedPlaylists => {

@@ -3,6 +3,7 @@ mod render;
 use musick_core::{AppCommand, Track, UserPlaylist};
 
 use crate::keymap::Action;
+use crate::views::artist::shuffle_tracks_in_place;
 use crate::views::{TrackSortMode, ViewEffect};
 use crate::widgets::{ActiveModal, ConfirmAction, ScrollState, TextInput};
 
@@ -128,21 +129,21 @@ impl PlaylistsView {
             PlaylistsPane::List => &[
                 ("c", "create"),
                 ("R", "rename"),
+                ("x", "shuffle"),
+                ("N/q", "next/queue"),
                 ("dd", "delete"),
                 ("I/E", "import/export"),
-                ("U", "upload YTM"),
-                ("S", "sync"),
+                ("U/S", "upload/sync"),
                 ("l/Tab", "tracks"),
-                ("/", "filter"),
             ],
             PlaylistsPane::Tracks => &[
                 ("Enter", "play"),
-                ("/", "filter"),
-                ("o", "sort"),
+                ("x", "shuffle"),
                 ("J/K", "reorder"),
                 ("dd", "remove"),
-                ("N/a", "next/queue"),
-                ("f", "like"),
+                ("N/q", "next/queue"),
+                ("A/a", "artist/album"),
+                ("e", "menu"),
                 ("h/Tab", "lists"),
             ],
         }
@@ -336,6 +337,35 @@ impl PlaylistsView {
                     ViewEffect::None
                 }
             }
+            Action::ArtistShuffle => {
+                if let Some(pl) = self.selected_playlist() {
+                    ViewEffect::ShuffleUserPlaylistDirect {
+                        playlist_id: pl.id.clone(),
+                    }
+                } else {
+                    ViewEffect::None
+                }
+            }
+            Action::PlayNext => {
+                if let Some(pl) = self.selected_playlist() {
+                    ViewEffect::QueueUserPlaylist {
+                        playlist_id: pl.id.clone(),
+                        play_next: true,
+                    }
+                } else {
+                    ViewEffect::None
+                }
+            }
+            Action::AppendQueue => {
+                if let Some(pl) = self.selected_playlist() {
+                    ViewEffect::QueueUserPlaylist {
+                        playlist_id: pl.id.clone(),
+                        play_next: false,
+                    }
+                } else {
+                    ViewEffect::None
+                }
+            }
             Action::RenamePlaylist => {
                 if let Some(pl) = self.selected_playlist() {
                     ViewEffect::OpenModal(ActiveModal::RenamePlaylist {
@@ -389,7 +419,11 @@ impl PlaylistsView {
             .get(self.track_cursor)
             .map(|&(orig_idx, t)| (orig_idx, t.clone()));
         let visible_owned: Option<Vec<Track>> =
-            if matches!(action, Action::Activate | Action::PlayDirect) && len > 0 {
+            if matches!(
+                action,
+                Action::Activate | Action::PlayDirect | Action::ArtistShuffle
+            ) && len > 0
+            {
                 Some(visible.iter().map(|(_, t)| (*t).clone()).collect())
             } else {
                 None
@@ -435,6 +469,18 @@ impl PlaylistsView {
                     ViewEffect::Command(AppCommand::PlayTracks {
                         start_index: self.track_cursor.min(tracks.len() - 1),
                         tracks,
+                        autoplay: true,
+                    })
+                } else {
+                    ViewEffect::None
+                }
+            }
+            Action::ArtistShuffle => {
+                if let Some(mut tracks) = visible_owned {
+                    shuffle_tracks_in_place(&mut tracks);
+                    ViewEffect::Command(AppCommand::PlayTracks {
+                        tracks,
+                        start_index: 0,
                         autoplay: true,
                     })
                 } else {

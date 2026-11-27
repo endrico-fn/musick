@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Widget;
 
 use crate::text::cell_width;
-use crate::theme::{ACCENT, BORDER_DIM, DIM};
+use crate::theme::{BORDER_DIM, DIM, active_theme};
 
 pub struct SectionTabs<'a> {
     pub tabs: &'a [(&'a str, &'a str)], // (full_label, short_label)
@@ -44,7 +44,7 @@ impl Widget for SectionTabs<'_> {
             }
             let style = if idx == self.active {
                 Style::default()
-                    .fg(ACCENT)
+                    .fg(active_theme().accent)
                     .bg(Color::Reset)
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
             } else {

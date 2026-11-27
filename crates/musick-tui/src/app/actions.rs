@@ -1,10 +1,14 @@
 use crossterm::event::KeyEvent;
 
-use musick_core::{AppCommand, Track};
+use musick_core::{AppCommand, SearchItem, Track};
 
 use crate::keymap::{Action, InputMode};
-use crate::views::ViewEffect;
-use crate::widgets::{ActiveModal, RootTab};
+use crate::views::{
+    ArtistTab, LibraryTab, PlayerFocusPane, PlayerPanelMode, PlaylistsPane, ViewEffect,
+};
+use crate::widgets::{
+    ActiveModal, ContextMenuAction, ContextMenuItem, PlayerBarControl, RootTab,
+};
 
 use super::{App, MAX_NAV_DEPTH, NavPage};
 
@@ -36,8 +40,9 @@ impl App {
         }
     }
 
-    fn switch_root_tab(&mut self, tab: RootTab) {
+    pub(super) fn switch_root_tab(&mut self, tab: RootTab) {
         self.active_tab = tab;
+        self.player_bar_focused = false;
         self.nav_stack.clear();
         if matches!(tab, RootTab::Playlists | RootTab::Library) {
             self.reload_local_collections();
@@ -53,6 +58,9 @@ impl App {
             self.handle_modal_action(action);
             return;
         }
+        if self.handle_player_bar_action(&action) {
+            return;
+        }
 
         match action {
             Action::Quit => {
@@ -62,6 +70,21 @@ impl App {
             Action::ToggleHelp => {
                 self.modal = Some(ActiveModal::KeymapHelp { scroll: 0 });
                 return;
+            }
+            Action::OpenContextMenu => {
+                self.open_context_menu();
+                return;
+            }
+            Action::FocusPaneDown => {
+                let enters_lyrics = self.nav_stack.is_empty()
+                    && self.active_tab == RootTab::Player
+                    && self.player.mode != PlayerPanelMode::Lyrics
+                    && self.player.focus_pane == PlayerFocusPane::Main;
+                if !enters_lyrics {
+                    self.player_bar_focused = true;
+                    self.player_bar_control = PlayerBarControl::Seekbar;
+                    return;
+                }
             }
             Action::SwitchTab(idx) => {
                 if let Some(tab) = RootTab::from_index(idx) {
@@ -101,7 +124,7 @@ impl App {
                 return;
             }
             Action::RefreshDiscover => {
-                self.trigger_discover_refresh();
+                self.trigger_discover_refresh(true);
                 self.set_toast("Refreshing Discover…");
                 return;
             }
@@ -180,19 +203,11 @@ impl App {
                 return;
             }
             Action::GoArtist => {
-                if let Some(track) = self.active_hovered_track() {
-                    self.open_artist_for_track(&track);
-                } else {
-                    self.set_toast("No track selected to jump to Artist");
-                }
+                self.handle_quick_go_artist();
                 return;
             }
             Action::GoAlbum => {
-                if let Some(track) = self.active_hovered_track() {
-                    self.open_album_for_track(&track);
-                } else {
-                    self.set_toast("No track selected to jump to Album");
-                }
+                self.handle_quick_go_album();
                 return;
             }
             Action::GoPlayingArtist => {
@@ -284,22 +299,412 @@ impl App {
         self.apply_effect(effect);
     }
 
-    fn active_hovered_track(&self) -> Option<Track> {
+    pub(super) fn active_hovered_item(&self) -> Option<SearchItem> {
+        if self.player_bar_focused {
+            return None;
+        }
         if let Some(top) = self.nav_stack.last() {
             match top {
-                NavPage::Artist(v) => v.hovered_track(),
-                NavPage::Album(v) => v.hovered_track(),
-                NavPage::PlaylistDetail(v) => v.hovered_track(),
+                NavPage::Artist(v) => v.hovered_item(),
+                NavPage::Album(v) => v.hovered_track().map(SearchItem::Track),
+                NavPage::PlaylistDetail(v) => v.hovered_track().map(SearchItem::Track),
             }
         } else {
             match self.active_tab {
-                RootTab::Player => self.player.hovered_track(),
-                RootTab::Playlists => self.playlists.hovered_track(),
-                RootTab::Library => self.library.hovered_track(),
-                RootTab::Queue => self.queue.hovered_track(&self.queue_snap),
+                RootTab::Player => self.player.hovered_item(),
+                RootTab::Playlists => self.playlists.hovered_track().map(SearchItem::Track),
+                RootTab::Library => self.library.hovered_item(),
+                RootTab::Queue => self.queue.hovered_track(&self.queue_snap).map(SearchItem::Track),
                 RootTab::Settings => None,
             }
         }
+    }
+
+    fn handle_quick_go_artist(&mut self) {
+        match self.active_hovered_item() {
+            Some(SearchItem::Artist(ar)) => {
+                self.apply_effect(ViewEffect::OpenArtist {
+                    browse_id: ar.browse_id,
+                    name_hint: ar.name,
+                });
+                return;
+            }
+            Some(SearchItem::Album(al)) => {
+                if let Some(art) = al.artists.iter().find(|a| a.id.is_some())
+                    && let Some(ref bid) = art.id
+                {
+                    self.apply_effect(ViewEffect::OpenArtist {
+                        browse_id: bid.clone(),
+                        name_hint: art.name.clone(),
+                    });
+                    return;
+                }
+            }
+            Some(SearchItem::Track(tr)) => {
+                if let Some(art) = tr.artists.iter().find(|a| a.id.is_some())
+                    && let Some(ref bid) = art.id
+                {
+                    self.apply_effect(ViewEffect::OpenArtist {
+                        browse_id: bid.clone(),
+                        name_hint: art.name.clone(),
+                    });
+                    return;
+                }
+                if let Some(NavPage::Album(v)) = self.nav_stack.last()
+                    && let Some(ref alb) = v.album
+                    && let Some(art) = alb.summary.artists.iter().find(|a| a.id.is_some())
+                    && let Some(ref bid) = art.id
+                {
+                    self.apply_effect(ViewEffect::OpenArtist {
+                        browse_id: bid.clone(),
+                        name_hint: art.name.clone(),
+                    });
+                    return;
+                }
+                self.set_toast("No artist link available for this track");
+                return;
+            }
+            Some(SearchItem::Playlist(_)) | None => {}
+        }
+
+        if let Some(NavPage::Album(v)) = self.nav_stack.last()
+            && let Some(ref alb) = v.album
+            && let Some(art) = alb.summary.artists.iter().find(|a| a.id.is_some())
+            && let Some(ref bid) = art.id
+        {
+            self.apply_effect(ViewEffect::OpenArtist {
+                browse_id: bid.clone(),
+                name_hint: art.name.clone(),
+            });
+            return;
+        }
+
+        if let Some(playing) = self.snapshot.track.clone() {
+            self.open_artist_for_track(&playing);
+        } else {
+            self.set_toast("No artist available — select an item or play a song");
+        }
+    }
+
+    fn handle_quick_go_album(&mut self) {
+        match self.active_hovered_item() {
+            Some(SearchItem::Artist(ar)) => {
+                self.apply_effect(ViewEffect::OpenArtistTab {
+                    browse_id: ar.browse_id,
+                    name_hint: ar.name,
+                    tab: ArtistTab::Albums,
+                });
+                return;
+            }
+            Some(SearchItem::Album(al)) => {
+                self.apply_effect(ViewEffect::OpenAlbum {
+                    browse_id: al.browse_id,
+                    title_hint: al.title,
+                });
+                return;
+            }
+            Some(SearchItem::Track(tr)) => {
+                self.open_album_for_track(&tr);
+                return;
+            }
+            Some(SearchItem::Playlist(_)) | None => {}
+        }
+
+        if let Some(playing) = self.snapshot.track.clone() {
+            self.open_album_for_track(&playing);
+        } else {
+            self.set_toast("No album available — select an item or play a song");
+        }
+    }
+
+    fn open_context_menu(&mut self) {
+        let on_user_pl = self.nav_stack.is_empty()
+            && ((self.active_tab == RootTab::Playlists
+                && self.playlists.pane == PlaylistsPane::List)
+                || (self.active_tab == RootTab::Library
+                    && self.library.active_tab == LibraryTab::UserPlaylists));
+        if on_user_pl {
+            let pl = if self.active_tab == RootTab::Playlists {
+                self.playlists.selected_playlist().cloned()
+            } else {
+                self.library.selected_user_playlist().cloned()
+            };
+            if let Some(pl) = pl {
+                let mut items = vec![
+                    ContextMenuItem {
+                        key: "p",
+                        label: "Play playlist".into(),
+                        action: ContextMenuAction::PlayNow,
+                    },
+                    ContextMenuItem {
+                        key: "x",
+                        label: "Shuffle play".into(),
+                        action: ContextMenuAction::ShufflePlay,
+                    },
+                    ContextMenuItem {
+                        key: "N",
+                        label: "Play next".into(),
+                        action: ContextMenuAction::PlayNext,
+                    },
+                    ContextMenuItem {
+                        key: "q",
+                        label: "Add to queue".into(),
+                        action: ContextMenuAction::AddToQueue,
+                    },
+                ];
+                if pl.remote_id.is_some() {
+                    items.push(ContextMenuItem {
+                        key: "yy",
+                        label: "Copy playlist URL".into(),
+                        action: ContextMenuAction::CopyUrl,
+                    });
+                }
+                items.push(ContextMenuItem {
+                    key: "dd",
+                    label: "Delete playlist".into(),
+                    action: ContextMenuAction::RemoveItem,
+                });
+                self.modal = Some(ActiveModal::ContextMenu {
+                    title: pl.title,
+                    subtitle: format!("{} tracks", pl.track_count),
+                    items,
+                    cursor: 0,
+                });
+                return;
+            }
+        }
+
+        let item = self
+            .active_hovered_item()
+            .or_else(|| self.snapshot.track.clone().map(SearchItem::Track));
+        let Some(item) = item else {
+            self.set_toast("No item selected for menu");
+            return;
+        };
+
+        let in_queue = self.nav_stack.is_empty() && self.active_tab == RootTab::Queue;
+        let in_user_tracks = self.nav_stack.is_empty()
+            && self.active_tab == RootTab::Playlists
+            && self.playlists.pane == PlaylistsPane::Tracks;
+        let on_artist_page = matches!(self.nav_stack.last(), Some(NavPage::Artist(_)));
+
+        let (title, subtitle, items) = match item {
+            SearchItem::Track(tr) => {
+                let mut items = vec![
+                    ContextMenuItem {
+                        key: "Enter",
+                        label: "Play now".into(),
+                        action: ContextMenuAction::PlayNow,
+                    },
+                    ContextMenuItem {
+                        key: "N",
+                        label: "Play next".into(),
+                        action: ContextMenuAction::PlayNext,
+                    },
+                    ContextMenuItem {
+                        key: "q",
+                        label: "Add to queue".into(),
+                        action: ContextMenuAction::AddToQueue,
+                    },
+                    ContextMenuItem {
+                        key: "r",
+                        label: "Start song mix / radio".into(),
+                        action: ContextMenuAction::StartRadio,
+                    },
+                ];
+                if tr.artists.iter().any(|a| a.id.is_some()) {
+                    items.push(ContextMenuItem {
+                        key: "A",
+                        label: "Go to artist".into(),
+                        action: ContextMenuAction::GoArtist,
+                    });
+                }
+                if tr.album_id.is_some() {
+                    items.push(ContextMenuItem {
+                        key: "a",
+                        label: "Go to album".into(),
+                        action: ContextMenuAction::GoAlbum,
+                    });
+                }
+                items.push(ContextMenuItem {
+                    key: "P",
+                    label: "Add to playlist".into(),
+                    action: ContextMenuAction::AddToPlaylist,
+                });
+                items.push(ContextMenuItem {
+                    key: "f",
+                    label: "Like / unlike song".into(),
+                    action: ContextMenuAction::ToggleLike,
+                });
+                items.push(ContextMenuItem {
+                    key: "yy",
+                    label: "Copy song URL".into(),
+                    action: ContextMenuAction::CopyUrl,
+                });
+                if in_queue || in_user_tracks {
+                    items.push(ContextMenuItem {
+                        key: "dd",
+                        label: if in_queue {
+                            "Remove from queue".into()
+                        } else {
+                            "Remove from playlist".into()
+                        },
+                        action: ContextMenuAction::RemoveItem,
+                    });
+                }
+                (tr.title.clone(), tr.artist_names(), items)
+            }
+            SearchItem::Artist(ar) => {
+                let mut items = vec![
+                    ContextMenuItem {
+                        key: "x",
+                        label: "Shuffle play".into(),
+                        action: ContextMenuAction::ShufflePlay,
+                    },
+                    ContextMenuItem {
+                        key: "r",
+                        label: "Start artist mix".into(),
+                        action: ContextMenuAction::StartRadio,
+                    },
+                    ContextMenuItem {
+                        key: "Enter",
+                        label: "Open artist profile".into(),
+                        action: ContextMenuAction::GoArtist,
+                    },
+                    ContextMenuItem {
+                        key: "a",
+                        label: "Open artist albums".into(),
+                        action: ContextMenuAction::GoAlbum,
+                    },
+                    ContextMenuItem {
+                        key: "W",
+                        label: "Follow / unfollow artist".into(),
+                        action: ContextMenuAction::ToggleArtistFollow,
+                    },
+                ];
+                if on_artist_page {
+                    items.push(ContextMenuItem {
+                        key: "i",
+                        label: "Read biography".into(),
+                        action: ContextMenuAction::ShowArtistBio,
+                    });
+                }
+                items.push(ContextMenuItem {
+                    key: "yy",
+                    label: "Copy artist URL".into(),
+                    action: ContextMenuAction::CopyUrl,
+                });
+                (
+                    ar.name,
+                    ar.subtitle.unwrap_or_else(|| "Artist".to_string()),
+                    items,
+                )
+            }
+            SearchItem::Album(al) => {
+                let mut items = vec![
+                    ContextMenuItem {
+                        key: "Enter",
+                        label: "Open album".into(),
+                        action: ContextMenuAction::GoAlbum,
+                    },
+                    ContextMenuItem {
+                        key: "p",
+                        label: "Play album".into(),
+                        action: ContextMenuAction::PlayNow,
+                    },
+                    ContextMenuItem {
+                        key: "x",
+                        label: "Shuffle play".into(),
+                        action: ContextMenuAction::ShufflePlay,
+                    },
+                    ContextMenuItem {
+                        key: "r",
+                        label: "Start album mix".into(),
+                        action: ContextMenuAction::StartRadio,
+                    },
+                    ContextMenuItem {
+                        key: "N",
+                        label: "Play next".into(),
+                        action: ContextMenuAction::PlayNext,
+                    },
+                    ContextMenuItem {
+                        key: "q",
+                        label: "Add to queue".into(),
+                        action: ContextMenuAction::AddToQueue,
+                    },
+                ];
+                if al.artists.iter().any(|a| a.id.is_some()) {
+                    items.push(ContextMenuItem {
+                        key: "A",
+                        label: "Go to artist".into(),
+                        action: ContextMenuAction::GoArtist,
+                    });
+                }
+                items.push(ContextMenuItem {
+                    key: "w",
+                    label: "Save / remove album in Library".into(),
+                    action: ContextMenuAction::ToggleSave,
+                });
+                items.push(ContextMenuItem {
+                    key: "yy",
+                    label: "Copy album URL".into(),
+                    action: ContextMenuAction::CopyUrl,
+                });
+                let sub = al.subtitle();
+                (al.title, sub, items)
+            }
+            SearchItem::Playlist(pl) => {
+                let items = vec![
+                    ContextMenuItem {
+                        key: "x",
+                        label: "Shuffle play".into(),
+                        action: ContextMenuAction::ShufflePlay,
+                    },
+                    ContextMenuItem {
+                        key: "r",
+                        label: "Start mix".into(),
+                        action: ContextMenuAction::StartRadio,
+                    },
+                    ContextMenuItem {
+                        key: "N",
+                        label: "Play next".into(),
+                        action: ContextMenuAction::PlayNext,
+                    },
+                    ContextMenuItem {
+                        key: "q",
+                        label: "Add to queue".into(),
+                        action: ContextMenuAction::AddToQueue,
+                    },
+                    ContextMenuItem {
+                        key: "w",
+                        label: "Save playlist to Library".into(),
+                        action: ContextMenuAction::ToggleSave,
+                    },
+                    ContextMenuItem {
+                        key: "P",
+                        label: "Save copy to My Playlists".into(),
+                        action: ContextMenuAction::SaveCopyToMyPlaylists,
+                    },
+                    ContextMenuItem {
+                        key: "yy",
+                        label: "Copy playlist URL".into(),
+                        action: ContextMenuAction::CopyUrl,
+                    },
+                ];
+                (
+                    pl.title,
+                    pl.author.unwrap_or_else(|| "Community playlist".into()),
+                    items,
+                )
+            }
+        };
+
+        self.modal = Some(ActiveModal::ContextMenu {
+            title,
+            subtitle,
+            items,
+            cursor: 0,
+        });
     }
 
     fn open_artist_for_track(&mut self, track: &Track) {
@@ -327,6 +732,7 @@ impl App {
     }
 
     pub(super) fn push_nav(&mut self, page: NavPage) {
+        self.player_bar_focused = false;
         if self.nav_stack.len() >= MAX_NAV_DEPTH {
             self.nav_stack.remove(0);
         }

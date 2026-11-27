@@ -8,7 +8,8 @@ use musick_core::{Album, AppCommand, SavedCollectionKind, Track};
 
 use crate::keymap::Action;
 use crate::text::{Align, trunc_cells, wrap_cells};
-use crate::theme::{ACCENT, DIM, TEXT, panel_block};
+use crate::theme::{DIM, TEXT, active_theme, panel_block};
+use crate::views::artist::shuffle_tracks_in_place;
 use crate::views::detail_hero::{DetailCover, render_detail_cover, split_detail_hero};
 use crate::views::{RenderCtx, TrackSortMode, ViewEffect};
 use crate::widgets::{
@@ -79,11 +80,11 @@ impl AlbumView {
         } else {
             &[
                 ("Enter/p", "play"),
-                ("/", "filter"),
-                ("o", "sort"),
-                ("N/a", "next/queue"),
+                ("x", "shuffle"),
+                ("N/q", "next/queue"),
+                ("A", "artist"),
                 ("P/f/w", "list/like/save"),
-                ("yy/Y", "copy track/album"),
+                ("e", "menu"),
                 ("Bksp", "back"),
             ]
         }
@@ -167,6 +168,18 @@ impl AlbumView {
                     return ViewEffect::Command(AppCommand::PlayTracks {
                         tracks: all_visible,
                         start_index: start,
+                        autoplay: true,
+                    });
+                }
+                ViewEffect::None
+            }
+            Action::ArtistShuffle => {
+                if !all_visible.is_empty() {
+                    let mut shuffled = all_visible;
+                    shuffle_tracks_in_place(&mut shuffled);
+                    return ViewEffect::Command(AppCommand::PlayTracks {
+                        tracks: shuffled,
+                        start_index: 0,
                         autoplay: true,
                     });
                 }
@@ -295,7 +308,7 @@ impl AlbumView {
                 )),
                 Line::from(Span::styled(
                     trunc_cells(&artists, w),
-                    Style::default().fg(ACCENT).bg(Color::Reset),
+                    Style::default().fg(active_theme().accent).bg(Color::Reset),
                 )),
                 Line::from(Span::styled(
                     trunc_cells(&meta, w),
@@ -348,8 +361,11 @@ impl AlbumView {
                 .join(", ");
             let mut first_seen: Option<String> = None;
             for t in &alb.tracks {
+                if t.artists.is_empty() {
+                    continue;
+                }
                 let names = t.artist_names();
-                if names.is_empty() || names == "Unknown" {
+                if names.is_empty() {
                     continue;
                 }
                 if !album_artist.is_empty() && !names.eq_ignore_ascii_case(&album_artist) {

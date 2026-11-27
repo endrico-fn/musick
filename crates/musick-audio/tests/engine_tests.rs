@@ -195,9 +195,6 @@ impl CatalogApi for MockEngineCatalog {
             })
         }
     }
-    async fn song_related(&self, _video_id: &str) -> CoreResult<Vec<SearchItem>> {
-        Ok(Vec::new())
-    }
     async fn yt_lyrics(&self, _video_id: &str) -> CoreResult<Option<Lyrics>> {
         Ok(None)
     }

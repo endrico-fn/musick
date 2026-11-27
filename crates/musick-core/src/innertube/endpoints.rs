@@ -20,12 +20,12 @@ pub const WEB_USER_AGENT: &str =
 pub const ANDROID_MUSIC_USER_AGENT: &str =
     "com.google.android.apps.youtube.music/7.29.52 (Linux; U; Android 14) gzip";
 
-/// return a fresh `1.YYYYMMDD.01.00` client version for today's utc date
+/// return a fresh `1.YYYYMMDD.01.00` client version for yesterday's utc date
 pub fn web_remix_client_version() -> String {
     let Ok(dur) = SystemTime::now().duration_since(UNIX_EPOCH) else {
         return WEB_REMIX_CLIENT_VERSION.to_string();
     };
-    let days = (dur.as_secs() / 86_400) as i64;
+    let days = (dur.as_secs().saturating_sub(86_400) / 86_400) as i64;
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64;
@@ -37,6 +37,24 @@ pub fn web_remix_client_version() -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m <= 2 { y + 1 } else { y };
     format!("1.{year:04}{m:02}{d:02}.01.00")
+}
+
+/// verify a telemetry or auth redirect url points strictly to an https google/youtube host
+pub fn is_trusted_google_url(raw: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(raw) else {
+        return false;
+    };
+    if parsed.scheme() != "https" || !parsed.username().is_empty() || parsed.password().is_some() {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.to_ascii_lowercase();
+    matches!(host.as_str(), "youtube.com" | "google.com" | "googleapis.com")
+        || host.ends_with(".youtube.com")
+        || host.ends_with(".google.com")
+        || host.ends_with(".googleapis.com")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

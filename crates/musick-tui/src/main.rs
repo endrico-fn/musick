@@ -4,7 +4,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
+use crossterm::event::{
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -31,7 +34,12 @@ const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 fn restore_terminal() {
     write_kitty_delete_all();
     let _ = disable_raw_mode();
-    let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
+    let _ = execute!(
+        io::stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    );
 }
 
 #[tokio::main]
@@ -89,10 +97,7 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
     ));
 
     let backend = Arc::new(MpvIpcBackend::new(&paths, settings.clone()));
-    let resolver = Arc::new(HybridStreamResolver::new(
-        &paths,
-        settings.player.audio_quality,
-    ));
+    let resolver = Arc::new(HybridStreamResolver::new(settings.player.audio_quality));
 
     let (engine_handle, engine_join) = PlayerEngine::spawn(PlayerEngineDeps {
         backend: backend.clone(),
@@ -137,7 +142,12 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableBracketedPaste,
+        EnableMouseCapture
+    )?;
     let covers = CoverRenderer::detect(settings.display.image_protocol);
     let backend_tui = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend_tui)?;
@@ -344,6 +354,9 @@ fn handle_term_event(app: &mut App, ev: Event) {
             if key.kind == crossterm::event::KeyEventKind::Press {
                 app.handle_key(key);
             }
+        }
+        Event::Mouse(mouse) => {
+            app.handle_mouse(mouse);
         }
         Event::Paste(pasted) => {
             app.handle_paste(&pasted);

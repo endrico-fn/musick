@@ -307,11 +307,12 @@ impl PlayerEngine {
                 }
             }
             InternalMsg::RadioAutofill {
+                radio_gen,
                 tracks,
                 continuation,
                 playlist_id,
             } => {
-                self.handle_radio_autofill(tracks, continuation, playlist_id)
+                self.handle_radio_autofill(radio_gen, tracks, continuation, playlist_id)
                     .await;
             }
             InternalMsg::TrackingLoaded {

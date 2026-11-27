@@ -6,7 +6,9 @@ use base64::Engine as _;
 use musick_core::{AppCommand, AuthMode, SavedCollectionKind};
 
 use crate::text::format_bytes;
-use crate::views::{AlbumView, ArtistView, PlaylistDetailView, ViewEffect};
+use crate::theme::set_active_accent;
+use crate::views::artist::shuffle_tracks_in_place;
+use crate::views::{AlbumView, ArtistTab, ArtistView, PlaylistDetailView, ViewEffect};
 use crate::widgets::{ActiveModal, RootTab};
 
 use super::{App, BgMsg, NavPage, SESSION_KV_KEY};
@@ -22,33 +24,14 @@ impl App {
                 browse_id,
                 name_hint,
             } => {
-                let saved = self
-                    .services
-                    .store
-                    .is_collection_saved(
-                        &self.services.auth.account_key(),
-                        SavedCollectionKind::Artist,
-                        &browse_id,
-                    )
-                    .unwrap_or(false);
-                self.push_nav(NavPage::Artist(Box::new(ArtistView::new(
-                    browse_id.clone(),
-                    name_hint,
-                    saved,
-                ))));
-                let cat = self.services.catalog.clone();
-                let tx = self.bg_tx.clone();
-                tokio::spawn(async move {
-                    let res = cat
-                        .artist(&browse_id)
-                        .await
-                        .map(Box::new)
-                        .map_err(|e| e.to_string());
-                    let _ = tx.send(BgMsg::ArtistLoaded {
-                        browse_id,
-                        result: res,
-                    });
-                });
+                self.open_artist_page(browse_id, name_hint, ArtistTab::Overview);
+            }
+            ViewEffect::OpenArtistTab {
+                browse_id,
+                name_hint,
+                tab,
+            } => {
+                self.open_artist_page(browse_id, name_hint, tab);
             }
             ViewEffect::OpenAlbum {
                 browse_id,
@@ -202,6 +185,259 @@ impl App {
                     }
                 });
             }
+            ViewEffect::ShuffleAlbumDirect { browse_id } => {
+                let cat = self.services.catalog.clone();
+                let eng = self.services.engine.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    match cat.album(&browse_id).await {
+                        Ok(mut alb) if !alb.tracks.is_empty() => {
+                            shuffle_tracks_in_place(&mut alb.tracks);
+                            eng.send(AppCommand::PlayTracks {
+                                tracks: alb.tracks,
+                                start_index: 0,
+                                autoplay: true,
+                            })
+                            .await;
+                        }
+                        Ok(_) => {
+                            let _ = tx.send(BgMsg::Toast("Album has no playable tracks".into()));
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgMsg::Toast(format!("Album shuffle error: {err}")));
+                        }
+                    }
+                });
+            }
+            ViewEffect::ShufflePlaylistDirect { browse_id } => {
+                let cat = self.services.catalog.clone();
+                let eng = self.services.engine.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    match cat.playlist(&browse_id, 100).await {
+                        Ok(mut pl) if !pl.tracks.is_empty() => {
+                            shuffle_tracks_in_place(&mut pl.tracks);
+                            eng.send(AppCommand::PlayTracks {
+                                tracks: pl.tracks,
+                                start_index: 0,
+                                autoplay: true,
+                            })
+                            .await;
+                        }
+                        Ok(_) => {
+                            let _ = tx.send(BgMsg::Toast("Playlist is empty".into()));
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgMsg::Toast(format!("Playlist shuffle error: {err}")));
+                        }
+                    }
+                });
+            }
+            ViewEffect::ShuffleArtistDirect { browse_id } => {
+                let cat = self.services.catalog.clone();
+                let eng = self.services.engine.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    match cat.artist(&browse_id).await {
+                        Ok(mut art) => {
+                            if let Some(sid) = art.shuffle_id {
+                                eng.send(AppCommand::StartRadio {
+                                    video_id: None,
+                                    playlist_id: Some(sid),
+                                    seed_track: None,
+                                })
+                                .await;
+                            } else if !art.songs.is_empty() {
+                                shuffle_tracks_in_place(&mut art.songs);
+                                eng.send(AppCommand::PlayTracks {
+                                    tracks: art.songs,
+                                    start_index: 0,
+                                    autoplay: true,
+                                })
+                                .await;
+                            } else {
+                                let _ = tx.send(BgMsg::Toast("Artist has no playable songs".into()));
+                            }
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgMsg::Toast(format!("Artist shuffle error: {err}")));
+                        }
+                    }
+                });
+            }
+            ViewEffect::ShuffleUserPlaylistDirect { playlist_id } => {
+                match self.services.store.playlist_tracks(&playlist_id) {
+                    Ok(mut tracks) if !tracks.is_empty() => {
+                        shuffle_tracks_in_place(&mut tracks);
+                        self.services.engine.try_send(AppCommand::PlayTracks {
+                            tracks,
+                            start_index: 0,
+                            autoplay: true,
+                        });
+                    }
+                    Ok(_) => self.set_toast("Playlist is empty"),
+                    Err(err) => self.set_toast(format!("Playlist shuffle error: {err}")),
+                }
+            }
+            ViewEffect::StartArtistRadio { browse_id } => {
+                let cat = self.services.catalog.clone();
+                let eng = self.services.engine.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    match cat.artist(&browse_id).await {
+                        Ok(art) => {
+                            if let Some(rid) = art.radio_id {
+                                eng.send(AppCommand::StartRadio {
+                                    video_id: None,
+                                    playlist_id: Some(rid),
+                                    seed_track: None,
+                                })
+                                .await;
+                            } else if let Some(first) = art.songs.into_iter().next() {
+                                eng.send(AppCommand::StartRadio {
+                                    video_id: Some(first.video_id.clone()),
+                                    playlist_id: None,
+                                    seed_track: Some(first),
+                                })
+                                .await;
+                            } else {
+                                let _ = tx.send(BgMsg::Toast("Artist has no songs for mix".into()));
+                            }
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgMsg::Toast(format!("Artist mix error: {err}")));
+                        }
+                    }
+                });
+            }
+            ViewEffect::StartAlbumRadio { browse_id } => {
+                let cat = self.services.catalog.clone();
+                let eng = self.services.engine.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    match cat.album(&browse_id).await {
+                        Ok(alb) => {
+                            if let Some(first) = alb.tracks.into_iter().next() {
+                                eng.send(AppCommand::StartRadio {
+                                    video_id: Some(first.video_id.clone()),
+                                    playlist_id: None,
+                                    seed_track: Some(first),
+                                })
+                                .await;
+                            } else {
+                                let _ = tx.send(BgMsg::Toast("Album has no tracks for mix".into()));
+                            }
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgMsg::Toast(format!("Album mix error: {err}")));
+                        }
+                    }
+                });
+            }
+            ViewEffect::StartPlaylistRadio { browse_id } => {
+                let cat = self.services.catalog.clone();
+                let eng = self.services.engine.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    if browse_id.starts_with("RD") {
+                        eng.send(AppCommand::StartRadio {
+                            video_id: None,
+                            playlist_id: Some(browse_id),
+                            seed_track: None,
+                        })
+                        .await;
+                        return;
+                    }
+                    match cat.playlist(&browse_id, 50).await {
+                        Ok(pl) => {
+                            if let Some(first) = pl.tracks.into_iter().next() {
+                                eng.send(AppCommand::StartRadio {
+                                    video_id: Some(first.video_id.clone()),
+                                    playlist_id: None,
+                                    seed_track: Some(first),
+                                })
+                                .await;
+                            } else {
+                                let _ = tx.send(BgMsg::Toast("Playlist is empty".into()));
+                            }
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgMsg::Toast(format!("Playlist mix error: {err}")));
+                        }
+                    }
+                });
+            }
+            ViewEffect::QueueAlbum {
+                browse_id,
+                play_next,
+            } => {
+                let cat = self.services.catalog.clone();
+                let eng = self.services.engine.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    match cat.album(&browse_id).await {
+                        Ok(alb) if !alb.tracks.is_empty() => {
+                            let cmd = if play_next {
+                                AppCommand::PlayNext { tracks: alb.tracks }
+                            } else {
+                                AppCommand::AppendTracks { tracks: alb.tracks }
+                            };
+                            eng.send(cmd).await;
+                        }
+                        Ok(_) => {
+                            let _ = tx.send(BgMsg::Toast("Album has no playable tracks".into()));
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgMsg::Toast(format!("Queue album error: {err}")));
+                        }
+                    }
+                });
+            }
+            ViewEffect::QueuePlaylist {
+                browse_id,
+                play_next,
+            } => {
+                let cat = self.services.catalog.clone();
+                let eng = self.services.engine.clone();
+                let tx = self.bg_tx.clone();
+                tokio::spawn(async move {
+                    match cat.playlist(&browse_id, 100).await {
+                        Ok(pl) if !pl.tracks.is_empty() => {
+                            let cmd = if play_next {
+                                AppCommand::PlayNext { tracks: pl.tracks }
+                            } else {
+                                AppCommand::AppendTracks { tracks: pl.tracks }
+                            };
+                            eng.send(cmd).await;
+                        }
+                        Ok(_) => {
+                            let _ = tx.send(BgMsg::Toast("Playlist is empty".into()));
+                        }
+                        Err(err) => {
+                            let _ = tx.send(BgMsg::Toast(format!("Queue playlist error: {err}")));
+                        }
+                    }
+                });
+            }
+            ViewEffect::QueueUserPlaylist {
+                playlist_id,
+                play_next,
+            } => match self.services.store.playlist_tracks(&playlist_id) {
+                Ok(tracks) if !tracks.is_empty() => {
+                    let cmd = if play_next {
+                        AppCommand::PlayNext { tracks }
+                    } else {
+                        AppCommand::AppendTracks { tracks }
+                    };
+                    self.services.engine.try_send(cmd);
+                }
+                Ok(_) => self.set_toast("Playlist is empty"),
+                Err(err) => self.set_toast(format!("Queue playlist error: {err}")),
+            },
+            ViewEffect::ImportRemotePlaylist { browse_id } => {
+                self.set_toast("Saving playlist copy to My Playlists…");
+                self.import_playlist_input(browse_id);
+            }
             ViewEffect::TriggerSearch { category, query } => {
                 if let Some(h) = self.search_task.take() {
                     h.abort();
@@ -242,7 +478,7 @@ impl App {
                 });
                 self.autocomplete_task = Some(jh.abort_handle());
             }
-            ViewEffect::RefreshDiscover => self.trigger_discover_refresh(),
+            ViewEffect::RefreshDiscover => self.trigger_discover_refresh(true),
             ViewEffect::OpenModal(m) => self.modal = Some(m),
             ViewEffect::SyncNow => self.trigger_sync_now(),
             ViewEffect::ToggleLike(track) => match self.services.sync.toggle_like(&track) {
@@ -375,6 +611,7 @@ impl App {
                 let history_disabled =
                     self.settings.privacy.save_history && !s.privacy.save_history;
                 self.settings = s.clone();
+                set_active_accent(s.display.accent);
                 if history_disabled {
                     self.session_dirty_at = None;
                     let _ = self.services.store.delete_kv(SESSION_KV_KEY);
@@ -406,7 +643,7 @@ impl App {
                     self.re_request_active_covers();
                 }
                 if region_changed {
-                    self.trigger_discover_refresh();
+                    self.trigger_discover_refresh(true);
                 }
             }
             ViewEffect::ClearCache => {
@@ -453,11 +690,40 @@ impl App {
                     settings: self.settings.clone(),
                 });
                 self.reload_local_collections();
-                self.trigger_discover_refresh();
+                self.settings_view.secret_backend = self.services.auth.secret_backend_label();
+                self.trigger_discover_refresh(true);
                 self.set_toast("Logged out -> no cookies ● (local playlists kept)");
             }
             ViewEffect::StatusToast(msg) => self.set_toast(msg),
         }
+    }
+
+    fn open_artist_page(&mut self, browse_id: String, name_hint: String, tab: ArtistTab) {
+        let saved = self
+            .services
+            .store
+            .is_collection_saved(
+                &self.services.auth.account_key(),
+                SavedCollectionKind::Artist,
+                &browse_id,
+            )
+            .unwrap_or(false);
+        self.push_nav(NavPage::Artist(Box::new(
+            ArtistView::new(browse_id.clone(), name_hint, saved).with_tab(tab),
+        )));
+        let cat = self.services.catalog.clone();
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            let res = cat
+                .artist(&browse_id)
+                .await
+                .map(Box::new)
+                .map_err(|e| e.to_string());
+            let _ = tx.send(BgMsg::ArtistLoaded {
+                browse_id,
+                result: res,
+            });
+        });
     }
 }
 

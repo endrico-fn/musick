@@ -147,13 +147,14 @@ pub async fn run_cli_command(
     match cmd {
         Commands::Auth { action } => match action {
             AuthCommands::Status => {
-                println!("Auth mode:   {}", auth.mode().as_str());
-                println!("Account key: {}", auth.account_key());
+                println!("Auth mode:    {}", auth.mode().as_str());
+                println!("Account key:  {}", auth.account_key());
+                println!("Secret store: {}", auth.secret_backend_label());
                 if let Some(pid) = auth.on_behalf_of_user() {
-                    println!("Brand Page:  {pid}");
+                    println!("Brand Page:   {pid}");
                 }
                 println!(
-                    "Telemetry:   {}",
+                    "Telemetry:    {}",
                     if settings.privacy.report_playback_history && auth.is_authenticated() {
                         "enabled (opt-in)"
                     } else {

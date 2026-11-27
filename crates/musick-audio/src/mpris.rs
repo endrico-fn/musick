@@ -288,10 +288,6 @@ mod linux_impl {
     }
 
     impl MprisService {
-        pub fn spawn(engine: PlayerEngineHandle) -> Self {
-            Self::spawn_inner(engine, None)
-        }
-
         pub fn spawn_with_quit_flag(
             engine: PlayerEngineHandle,
             quit_flag: Arc<AtomicBool>,
@@ -384,10 +380,6 @@ pub struct MprisService;
 
 #[cfg(not(target_os = "linux"))]
 impl MprisService {
-    pub fn spawn(_engine: crate::engine::PlayerEngineHandle) -> Self {
-        Self
-    }
-
     pub fn spawn_with_quit_flag(
         _engine: crate::engine::PlayerEngineHandle,
         _quit_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,

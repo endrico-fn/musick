@@ -9,6 +9,18 @@ use tokio::process::Command;
 
 const REPO: &str = "endrico-fn/musick";
 
+fn is_trusted_github_url(raw: &str) -> bool {
+    let Some(rest) = raw.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() || authority.contains('@') {
+        return false;
+    }
+    let host = authority.split(':').next().unwrap_or("").to_ascii_lowercase();
+    host == "github.com" || host.ends_with(".githubusercontent.com")
+}
+
 pub fn release_asset_name(arch: &str) -> Option<String> {
     let normalized_arch = match arch {
         "x86_64" | "amd64" => "x86_64",
@@ -92,6 +104,9 @@ pub async fn run_update(check_only: bool) -> Result<(), Box<dyn std::error::Erro
         .ok_or_else(|| format!("Asset {asset_name} not found in release {tag}"))?;
     let sums_url = find_url("SHA256SUMS.txt")
         .ok_or_else(|| format!("SHA256SUMS.txt not found in release {tag}"))?;
+    if !is_trusted_github_url(&tarball_url) || !is_trusted_github_url(&sums_url) {
+        return Err("Refusing to download release asset from untrusted URL".into());
+    }
 
     println!("Downloading {asset_name} and SHA256SUMS.txt…");
     let sums_text = client.get(&sums_url).send().await?.text().await?;

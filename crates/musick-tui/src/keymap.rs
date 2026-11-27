@@ -105,6 +105,8 @@ pub enum Action {
     Undo,
     Deduplicate,
     ClearUpcoming,
+    ClearAllQueue,
+    OpenContextMenu,
 
     // Playlist Management & Utility
     RenamePlaylist,
@@ -363,7 +365,7 @@ impl KeymapEngine {
             KeyCode::Backspace | KeyCode::Char('H') => Some(Action::GoBack),
             KeyCode::Esc => Some(Action::Escape),
             KeyCode::Char('?') => Some(Action::ToggleHelp),
-            KeyCode::Char('q') => Some(Action::Quit),
+            KeyCode::Char('Q') => Some(Action::Quit),
 
             // navigation
             KeyCode::Char('h') | KeyCode::Left => Some(Action::MoveLeft),
@@ -374,11 +376,14 @@ impl KeymapEngine {
             KeyCode::PageDown => Some(Action::HalfPageDown),
             KeyCode::PageUp => Some(Action::HalfPageUp),
 
-            // item actions
+            // item actions & quick jumps
             KeyCode::Enter => Some(Action::Activate),
             KeyCode::Char('p') => Some(Action::PlayDirect),
             KeyCode::Char('N') => Some(Action::PlayNext),
-            KeyCode::Char('a') => Some(Action::AppendQueue),
+            KeyCode::Char('q') => Some(Action::AppendQueue),
+            KeyCode::Char('A') => Some(Action::GoArtist),
+            KeyCode::Char('a') => Some(Action::GoAlbum),
+            KeyCode::Char('e') => Some(Action::OpenContextMenu),
             KeyCode::Char('P') => Some(Action::AddToPlaylist),
             KeyCode::Char('f') => Some(Action::ToggleLike),
             KeyCode::Char('w') => Some(Action::ToggleSave),
@@ -396,6 +401,7 @@ impl KeymapEngine {
             KeyCode::Char('u') => Some(Action::Undo),
             KeyCode::Char('D') => Some(Action::Deduplicate),
             KeyCode::Char('C') => Some(Action::ClearUpcoming),
+            KeyCode::Char('X') => Some(Action::ClearAllQueue),
 
             // playlist management & copy
             KeyCode::Char('R') => Some(Action::RenamePlaylist),

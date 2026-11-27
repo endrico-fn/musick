@@ -4,7 +4,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use musick_core::{SearchCategory, Track};
+use musick_core::{SearchCategory, SearchItem, Track};
 
 use crate::text::{Align, trunc_cells, wrap_cells};
 use crate::theme::{ERR, accent_style, base_style, cover_panel_block, dim_style, panel_block};
@@ -14,23 +14,13 @@ use crate::widgets::{
     TrackTable, render_filter_bar, render_media_list,
 };
 
-use super::discover::{item_to_media_item, item_to_table_row};
+use super::discover::item_to_media_item;
 use super::{DiscoverTab, PlayerFocusPane, PlayerPanelMode, PlayerView};
 
 const DISCOVER_TABS: &[(&str, &str)] = &[
     ("Mixes", "Mixes"),
     ("New Releases", "New Rel."),
     ("Featured", "Featured"),
-];
-
-const SEARCH_TABS: &[(&str, &str)] = &[
-    ("All", "All"),
-    ("Songs", "Songs"),
-    ("Videos", "Videos"),
-    ("Albums", "Albums"),
-    ("Artists", "Artists"),
-    ("Playlists", "Lists"),
-    ("Community", "Comm."),
 ];
 
 impl PlayerView {
@@ -142,7 +132,7 @@ impl PlayerView {
         frame.render_widget(
             CavaWidget {
                 bars: &ctx.cava.bars,
-                palette: ctx.settings.display.cava_palette,
+                accent: ctx.settings.display.accent,
                 idle: !ctx.cava.live,
             },
             cava_inner,
@@ -278,98 +268,53 @@ impl PlayerView {
                 let playing_vid = ctx.snapshot.track.as_ref().map(|t| t.video_id.as_str());
                 match self.discover_tab {
                     DiscoverTab::Mixes => {
-                        let rows: Vec<TableRow> = self
+                        let items: Vec<MediaListItem> = self
                             .feed
                             .mixes
                             .iter()
                             .map(|t| {
-                                let mut r = TableRow::new(vec![
-                                    t.title.clone(),
-                                    t.artist_names(),
-                                    t.plays.clone().unwrap_or_else(|| t.duration_text()),
-                                ]);
-                                r.is_playing = playing_vid == Some(t.video_id.as_str());
-                                r.prefix_icon = Some(if t.is_video() {
-                                    ctx.icons.video
-                                } else {
-                                    ctx.icons.song
-                                });
-                                r
+                                item_to_media_item(
+                                    &SearchItem::Track(t.clone()),
+                                    playing_vid,
+                                    ctx.icons,
+                                )
                             })
                             .collect();
-                        let cols = [
-                            ColumnDef {
-                                title: "Title",
-                                fixed_width: None,
-                                align: Align::Left,
-                            },
-                            ColumnDef {
-                                title: "Artist",
-                                fixed_width: Some(18),
-                                align: Align::Left,
-                            },
-                            ColumnDef {
-                                title: "Info",
-                                fixed_width: Some(7),
-                                align: Align::Right,
-                            },
-                        ];
-                        frame.render_widget(
-                            TrackTable {
-                                columns: &cols,
-                                rows: &rows,
-                                cursor: self.mixes_cursor,
-                                scroll: Some(&self.mixes_scroll),
-                                focused,
-                                show_header: false,
-                                loading: self.loading_discover,
-                                loading_label: "Loading Mixes…",
-                                empty_text: "No mixes yet — press / to search YouTube Music",
-                                icons: ctx.icons,
-                                spinner: ctx.spinner,
-                            },
+                        render_media_list(
+                            frame,
                             parts[1],
+                            &items,
+                            self.mixes_cursor,
+                            Some(&self.mixes_scroll),
+                            focused,
+                            self.loading_discover,
+                            "Loading Mixes…",
+                            "No mixes yet — press gr to refresh or / to search",
+                            ctx.icons,
+                            ctx.spinner,
+                            covers,
                         );
                     }
                     DiscoverTab::NewReleases => {
-                        let rows: Vec<TableRow> = self
+                        let items: Vec<MediaListItem> = self
                             .feed
                             .new_releases
                             .iter()
-                            .map(|item| item_to_table_row(item, playing_vid, ctx.icons))
+                            .map(|item| item_to_media_item(item, playing_vid, ctx.icons))
                             .collect();
-                        let cols = [
-                            ColumnDef {
-                                title: "Release",
-                                fixed_width: None,
-                                align: Align::Left,
-                            },
-                            ColumnDef {
-                                title: "Subtitle",
-                                fixed_width: Some(20),
-                                align: Align::Left,
-                            },
-                            ColumnDef {
-                                title: "Type",
-                                fixed_width: Some(8),
-                                align: Align::Right,
-                            },
-                        ];
-                        frame.render_widget(
-                            TrackTable {
-                                columns: &cols,
-                                rows: &rows,
-                                cursor: self.new_rel_cursor,
-                                scroll: Some(&self.new_rel_scroll),
-                                focused,
-                                show_header: false,
-                                loading: self.loading_discover,
-                                loading_label: "Loading New Releases…",
-                                empty_text: "No new releases available — press / to search",
-                                icons: ctx.icons,
-                                spinner: ctx.spinner,
-                            },
+                        render_media_list(
+                            frame,
                             parts[1],
+                            &items,
+                            self.new_rel_cursor,
+                            Some(&self.new_rel_scroll),
+                            focused,
+                            self.loading_discover,
+                            "Loading New Releases…",
+                            "No new releases available — press / to search",
+                            ctx.icons,
+                            ctx.spinner,
+                            covers,
                         );
                     }
                     DiscoverTab::Featured => {
@@ -416,13 +361,17 @@ impl PlayerView {
                     "Press / to search songs, lyrics, artists, URL…",
                 );
 
+                let search_tabs: Vec<(&str, &str)> = SearchCategory::ALL
+                    .iter()
+                    .map(|c| (c.label(), c.short_label()))
+                    .collect();
                 let cat_idx = SearchCategory::ALL
                     .iter()
                     .position(|c| *c == self.search_category)
                     .unwrap_or(0);
                 frame.render_widget(
                     SectionTabs {
-                        tabs: SEARCH_TABS,
+                        tabs: &search_tabs,
                         active: cat_idx,
                         right_hint: None,
                     },

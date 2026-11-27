@@ -28,9 +28,12 @@ impl PlayerEngine {
                 {
                     tracks.insert(0, seed);
                 }
+                self.radio_gen += 1;
+                self.radio_inflight = false;
                 self.radio_continuation = batch.continuation;
                 self.radio_playlist_id = batch.playlist_id.or(playlist_id);
                 self.snapshot.autoplay_active = true;
+                self.snapshot.radio_active = true;
                 self.queue.set_tracks(tracks, 0);
                 self.publish_queue();
                 if let Some(cur) = self.queue.current().cloned() {
@@ -50,10 +53,14 @@ impl PlayerEngine {
 
     pub(super) async fn handle_radio_autofill(
         &mut self,
+        radio_gen: u64,
         tracks: Vec<Track>,
         continuation: Option<String>,
         playlist_id: Option<String>,
     ) {
+        if radio_gen != self.radio_gen {
+            return;
+        }
         self.radio_inflight = false;
         if continuation.is_some() {
             self.radio_continuation = continuation;
@@ -72,6 +79,7 @@ impl PlayerEngine {
             .filter(|t| !existing.contains(&t.video_id))
             .collect();
         if !fresh.is_empty() {
+            self.snapshot.radio_active = true;
             self.queue.append(fresh);
             self.publish_queue();
             if self.pending_autofill_advance {
@@ -109,6 +117,7 @@ impl PlayerEngine {
         };
 
         self.radio_inflight = true;
+        let radio_gen = self.radio_gen;
         let catalog = self.catalog.clone();
         let tx = self.internal_tx.clone();
         let pid = self.radio_playlist_id.clone();
@@ -121,6 +130,7 @@ impl PlayerEngine {
             match res {
                 Ok(batch) => {
                     let _ = tx.send(InternalMsg::RadioAutofill {
+                        radio_gen,
                         tracks: batch.tracks,
                         continuation: batch.continuation,
                         playlist_id: batch.playlist_id,
@@ -129,6 +139,7 @@ impl PlayerEngine {
                 Err(err) => {
                     debug!("Radio autofill failed: {err}");
                     let _ = tx.send(InternalMsg::RadioAutofill {
+                        radio_gen,
                         tracks: Vec::new(),
                         continuation: None,
                         playlist_id: None,

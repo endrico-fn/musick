@@ -8,7 +8,7 @@ use lru::LruCache;
 use tokio::process::Command;
 use tracing::debug;
 
-use musick_core::{AppPaths, AudioQuality, SingleFlight, is_valid_video_id};
+use musick_core::{AudioQuality, SingleFlight, is_valid_video_id};
 
 use crate::error::{AudioError, AudioResult};
 
@@ -255,7 +255,7 @@ pub struct HybridStreamResolver {
 }
 
 impl HybridStreamResolver {
-    pub fn new(_paths: &AppPaths, quality: AudioQuality) -> Self {
+    pub fn new(quality: AudioQuality) -> Self {
         Self::with_backends(
             None,
             Arc::new(YtDlpBackend::new()),
@@ -325,12 +325,6 @@ impl HybridStreamResolver {
         if was_fast_path && let Ok(mut cb) = self.circuit.lock() {
             cb.consecutive_failures = CIRCUIT_BREAKER_THRESHOLD;
             cb.cooldown_until = (self.clock)() + CIRCUIT_BREAKER_COOLDOWN_SECS;
-        }
-    }
-
-    pub fn clear_cache(&self) {
-        if let Ok(mut cache) = self.cache.lock() {
-            cache.clear();
         }
     }
 

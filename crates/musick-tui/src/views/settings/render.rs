@@ -6,34 +6,38 @@ use ratatui::widgets::Paragraph;
 
 use crate::text::{Align, align_cells, format_bytes, trunc_cells};
 use crate::theme::{
-    ACCENT, BORDER_DIM, CURSOR_BG, DIM, TEXT, accent_bold_style, dim_style, panel_block,
+    BORDER_DIM, DIM, TEXT, accent_bold_style, active_theme, dim_style, panel_block,
 };
 use crate::views::RenderCtx;
-use crate::widgets::{render_filter_bar, render_scrollbar};
+use crate::widgets::{SectionTabs, render_filter_bar, render_scrollbar};
 
 use super::SettingsView;
-use super::rows::{SettingRow, format_setting_value};
+use super::rows::{SettingRow, SettingsSection, format_setting_value};
 
 impl SettingsView {
     pub fn render(&self, frame: &mut Frame<'_>, area: Rect, ctx: &RenderCtx<'_>) {
         if area.width < 20 || area.height < 5 {
             return;
         }
+        let auth_label = if ctx.auth_mode.is_authenticated() {
+            format!("{} ({})", ctx.auth_mode.as_str(), self.secret_backend)
+        } else {
+            "anonymous (no cookies)".to_string()
+        };
         let cache_summary = format!(
-            "Auth: {} · Cache: {}",
-            ctx.auth_mode.as_str(),
+            "Auth: {auth_label} · Cache: {}",
             format_bytes(ctx.cache_stats.total_bytes)
         );
         let block = panel_block("Settings", Some(&cache_summary), false);
         let inner = block.inner(area);
         frame.render_widget(block, area);
-        if inner.width < 10 || inner.height < 2 {
+        if inner.width < 10 || inner.height < 3 {
             return;
         }
 
         let show_filter = self.filter_active || self.has_filter();
-        let show_desc = inner.height >= 4;
-        let mut constraints = Vec::new();
+        let show_desc = inner.height >= 5;
+        let mut constraints = vec![Constraint::Length(1)];
         if show_filter {
             constraints.push(Constraint::Length(1));
         }
@@ -46,7 +50,20 @@ impl SettingsView {
             .constraints(constraints)
             .split(inner);
 
-        let mut part_idx = 0;
+        let sec_tabs: Vec<(&str, &str)> = SettingsSection::ALL
+            .iter()
+            .map(|s| (s.label(), s.short_label()))
+            .collect();
+        frame.render_widget(
+            SectionTabs {
+                tabs: &sec_tabs,
+                active: self.section.index(),
+                right_hint: Some("Tab switch"),
+            },
+            parts[0],
+        );
+
+        let mut part_idx = 1;
         if show_filter {
             render_filter_bar(
                 frame,
@@ -66,6 +83,7 @@ impl SettingsView {
         let selected_row = visible.get(selected_idx).copied();
 
         enum DisplayLine {
+            Spacer,
             Header(&'static str),
             Item(usize, SettingRow),
         }
@@ -75,6 +93,9 @@ impl SettingsView {
         for (idx, &row) in visible.iter().enumerate() {
             let grp = row.group();
             if last_group != Some(grp) {
+                if last_group.is_some() {
+                    display.push(DisplayLine::Spacer);
+                }
                 display.push(DisplayLine::Header(grp));
                 last_group = Some(grp);
             }
@@ -93,6 +114,7 @@ impl SettingsView {
                 list_area,
             );
         } else {
+            let theme = active_theme();
             let vis_h = usize::from(list_area.height);
             let total_lines = display.len();
             let mut scroll =
@@ -115,6 +137,7 @@ impl SettingsView {
                     height: 1,
                 };
                 match entry {
+                    DisplayLine::Spacer => {}
                     DisplayLine::Header(group) => {
                         let title = format!("── {group} ");
                         let fill_len = content_w.saturating_sub(title.chars().count());
@@ -130,11 +153,15 @@ impl SettingsView {
                     DisplayLine::Item(idx, row) => {
                         let is_sel = *idx == selected_idx;
                         let (val, is_dim) = format_setting_value(*row, ctx);
-                        let bg = if is_sel { CURSOR_BG } else { Color::Reset };
+                        let bg = if is_sel {
+                            theme.cursor_bg
+                        } else {
+                            Color::Reset
+                        };
                         let pointer = if is_sel { "▸ " } else { "  " };
                         let label_style = if is_sel {
                             Style::default()
-                                .fg(ACCENT)
+                                .fg(theme.accent)
                                 .bg(bg)
                                 .add_modifier(Modifier::BOLD)
                         } else if is_dim {

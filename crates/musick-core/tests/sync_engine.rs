@@ -111,9 +111,6 @@ impl CatalogApi for MockCatalog {
     ) -> CoreResult<RadioBatch> {
         Ok(RadioBatch::default())
     }
-    async fn song_related(&self, _video_id: &str) -> CoreResult<Vec<SearchItem>> {
-        Ok(Vec::new())
-    }
     async fn yt_lyrics(&self, _video_id: &str) -> CoreResult<Option<Lyrics>> {
         Ok(None)
     }

@@ -3,8 +3,8 @@ use serde_json::Value;
 use crate::domain::{AlbumSummary, ArtistRef, ArtistSummary, PlaylistSummary, SearchItem, Track};
 use crate::innertube::extract::{
     extract_navigation_browse_id, extract_navigation_page_type, extract_thumbs,
-    extract_watch_video_id, extract_watch_video_type, get_path, parse_duration_str, runs_text,
-    runs_vec,
+    extract_watch_playlist_id, extract_watch_video_id, extract_watch_video_type, get_path,
+    parse_duration_str, runs_text, runs_vec,
 };
 
 use super::{
@@ -212,12 +212,49 @@ pub fn parse_responsive_list_item(item: &Value) -> Option<SearchItem> {
 }
 
 pub fn parse_two_row_item(item: &Value) -> Option<SearchItem> {
-    let title = item.get("title").and_then(runs_text)?;
+    let title_val = item.get("title")?;
+    let title = runs_text(title_val)?;
     let thumbs = extract_thumbs(item);
     let sub_val = item.get("subtitle");
     let sub_text = sub_val.and_then(runs_text);
 
-    if let Some(vid) = extract_watch_video_id(item) {
+    let first_run = runs_vec(title_val).into_iter().next();
+    let overlay_play_ep = get_path(
+        item,
+        &[
+            "thumbnailOverlay",
+            "musicItemThumbnailOverlayRenderer",
+            "content",
+            "musicPlayButtonRenderer",
+            "playNavigationEndpoint",
+        ],
+    )
+    .or_else(|| {
+        get_path(
+            item,
+            &[
+                "overlay",
+                "musicItemThumbnailOverlayRenderer",
+                "content",
+                "musicPlayButtonRenderer",
+                "playNavigationEndpoint",
+            ],
+        )
+    });
+
+    let primary_video_id =
+        extract_watch_video_id(item).or_else(|| first_run.and_then(extract_watch_video_id));
+    let browse_id = extract_navigation_browse_id(item)
+        .or_else(|| first_run.and_then(extract_navigation_browse_id));
+    let video_id = primary_video_id.or_else(|| {
+        if browse_id.is_none() {
+            overlay_play_ep.and_then(extract_watch_video_id)
+        } else {
+            None
+        }
+    });
+
+    if let Some(vid) = video_id {
         let mut artists = Vec::new();
         let mut plays = None;
         if let Some(sv) = sub_val {
@@ -250,14 +287,29 @@ pub fn parse_two_row_item(item: &Value) -> Option<SearchItem> {
             duration: None,
             thumbs,
             plays,
-            video_type: extract_watch_video_type(item),
+            video_type: extract_watch_video_type(item)
+                .or_else(|| first_run.and_then(extract_watch_video_type))
+                .or_else(|| overlay_play_ep.and_then(extract_watch_video_type)),
             set_video_id: None,
             is_available: true,
         }));
     }
 
-    let bid = extract_navigation_browse_id(item)?;
-    let pt = extract_navigation_page_type(item).unwrap_or_default();
+    let Some(bid) = browse_id else {
+        let pid = extract_watch_playlist_id(item)
+            .or_else(|| first_run.and_then(extract_watch_playlist_id))
+            .or_else(|| overlay_play_ep.and_then(extract_watch_playlist_id))?;
+        return Some(SearchItem::Playlist(PlaylistSummary {
+            browse_id: pid.strip_prefix("VL").unwrap_or(&pid).to_string(),
+            title,
+            author: sub_text,
+            count: None,
+            thumbs,
+        }));
+    };
+    let pt = extract_navigation_page_type(item)
+        .or_else(|| first_run.and_then(extract_navigation_page_type))
+        .unwrap_or_default();
 
     if pt == "MUSIC_PAGE_TYPE_ARTIST" || bid.starts_with("UC") || bid.starts_with("MPLA") {
         return Some(SearchItem::Artist(ArtistSummary {

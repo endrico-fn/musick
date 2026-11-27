@@ -668,3 +668,141 @@ fn parses_mpla_artist_card_shelf_metadata_spelling_hint_and_entity_suggestions()
         vec!["daft punk".to_string(), "Discovery".to_string()]
     );
 }
+
+#[tokio::test]
+async fn discover_mixes_multi_page_watch_playlist_and_telemetry_ssrf_guard() {
+    use std::sync::Arc;
+    use tempfile::tempdir;
+
+    use musick_core::innertube::parsers::{parse_discover_feed_pages, parse_two_row_item};
+    use musick_core::{
+        AppPaths, AuthManager, CacheManager, CacheSettings, CatalogApi, InnerTubeClient,
+        MemorySecretStore, PlaybackTelemetryEvent, PlaybackTracking,
+    };
+
+    // 1. Two-row Mix card with watchPlaylistEndpoint (no browseEndpoint) parses as Playlist
+    let mix_card = json!({
+        "title": { "runs": [{ "text": "My Supermix" }] },
+        "subtitle": { "runs": [{ "text": "Daft Punk, Justice and more" }] },
+        "navigationEndpoint": {
+            "watchPlaylistEndpoint": { "playlistId": "RDTMAK5uy_supermix" }
+        }
+    });
+    match parse_two_row_item(&mix_card) {
+        Some(SearchItem::Playlist(pl)) => {
+            assert_eq!(pl.browse_id, "RDTMAK5uy_supermix");
+            assert_eq!(pl.title, "My Supermix");
+        }
+        other => panic!("expected Mix Playlist, got {other:?}"),
+    }
+
+    // 2. Album card with browseEndpoint AND overlay watchEndpoint MUST stay Album (not Track)
+    let album_card = json!({
+        "title": { "runs": [{ "text": "Discovery" }] },
+        "subtitle": { "runs": [{ "text": "Album" }, { "text": " • " }, { "text": "2001" }] },
+        "navigationEndpoint": {
+            "browseEndpoint": { "browseId": "MPREb_disc" }
+        },
+        "thumbnailOverlay": {
+            "musicItemThumbnailOverlayRenderer": {
+                "content": {
+                    "musicPlayButtonRenderer": {
+                        "playNavigationEndpoint": {
+                            "watchEndpoint": { "videoId": "first_track_vid" }
+                        }
+                    }
+                }
+            }
+        }
+    });
+    assert!(matches!(
+        parse_two_row_item(&album_card),
+        Some(SearchItem::Album(al)) if al.browse_id == "MPREb_disc"
+    ));
+
+    // 3. Multi-page FEmusic_home continuation (e.g. logged-in Quick picks on page 2) populates mixes
+    let home_p1 = json!({
+        "contents": {
+            "singleColumnBrowseResultsRenderer": {
+                "tabs": [{
+                    "tabRenderer": {
+                        "content": {
+                            "sectionListRenderer": {
+                                "contents": [{
+                                    "musicCarouselShelfRenderer": {
+                                        "header": { "musicCarouselShelfBasicHeaderRenderer": { "title": { "runs": [{ "text": "Mixed for you" }] } } },
+                                        "contents": [{ "musicTwoRowItemRenderer": mix_card }]
+                                    }
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        }
+    });
+    let home_p2 = json!({
+        "continuationContents": {
+            "sectionListContinuation": {
+                "contents": [{
+                    "musicShelfRenderer": {
+                        "title": { "runs": [{ "text": "Quick picks" }] },
+                        "contents": [{
+                            "musicResponsiveListItemRenderer": {
+                                "playlistItemData": { "videoId": "qp_vid_1" },
+                                "flexColumns": [
+                                    { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "One More Time" }] } } },
+                                    { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Daft Punk" }] } } }
+                                ]
+                            }
+                        }]
+                    }
+                }]
+            }
+        }
+    });
+    let feed = parse_discover_feed_pages(&[&home_p1, &home_p2], None, None, None);
+    assert_eq!(feed.mixes.len(), 1);
+    assert_eq!(feed.mixes[0].video_id, "qp_vid_1");
+    assert_eq!(feed.playlists.len(), 1);
+    assert_eq!(feed.playlists[0].browse_id, "RDTMAK5uy_supermix");
+
+    // 4. Authenticated telemetry refuses untrusted non-Google URLs (no HTTP request / no credential leak)
+    let dir = tempdir().unwrap();
+    let paths = AppPaths::from_roots(
+        dir.path().join("cfg"),
+        dir.path().join("data"),
+        dir.path().join("cache"),
+        dir.path().join("rt"),
+    );
+    let cache = Arc::new(CacheManager::open(&paths, CacheSettings::default()).unwrap());
+    let store = Arc::new(MemorySecretStore::new());
+    let http = reqwest::Client::new();
+    let auth = Arc::new(AuthManager::new_anonymous(store, http.clone()));
+    auth.import_browser_headers("cookie: SAPISID=live_secret", None)
+        .unwrap();
+    let client = InnerTubeClient::new(http, auth, cache, "ID");
+    let untrusted = PlaybackTracking {
+        video_id: "vid_x".into(),
+        playback_url: Some("http://127.0.0.1:1/steal_cookies".into()),
+        watchtime_url: Some("https://evil.example/steal_cookies".into()),
+        length_secs: 180,
+    };
+    client
+        .report_playback(&untrusted, "cpn1", PlaybackTelemetryEvent::Start, true)
+        .await
+        .unwrap();
+    client
+        .report_playback(
+            &untrusted,
+            "cpn1",
+            PlaybackTelemetryEvent::Watchtime {
+                elapsed_secs: 20.0,
+                duration_secs: 180.0,
+                playing: true,
+            },
+            true,
+        )
+        .await
+        .unwrap();
+}

@@ -70,7 +70,7 @@ mod widget_render_tests {
     use ratatui::layout::Rect;
 
     use musick_core::{
-        AuthMode, CavaPalette, ImageProtocol, LyricLine, Lyrics, PlaybackSnapshot, PositionTick,
+        AuthMode, ImageProtocol, LyricLine, Lyrics, PlaybackSnapshot, PositionTick, ThemeAccent,
         Track,
     };
     use musick_tui::theme::{
@@ -221,7 +221,7 @@ mod widget_render_tests {
             f.render_widget(
                 CavaWidget {
                     bars: &[0.2, 0.5, 0.9, 0.4, 0.7],
-                    palette: CavaPalette::Teal,
+                    accent: ThemeAccent::Teal,
                     idle: false,
                 },
                 Rect::new(30, 0, 30, 10),
@@ -509,5 +509,123 @@ mod widget_render_tests {
         let without_cover = split_detail_hero(area, &covers);
         assert!(without_cover.cover_area.is_none());
         assert_eq!(without_cover.info_area.width, area.width);
+    }
+
+    #[test]
+    fn media_list_has_one_blank_row_gap_with_preview_and_compact_single_row_when_off() {
+        let items = vec![
+            MediaListItem {
+                title: "First Track".into(),
+                subtitle: "Artist A".into(),
+                meta_top: "12M".into(),
+                meta_bottom: "3:10".into(),
+                cover_url: None,
+                glyph: UNICODE_ICONS.song,
+                is_playing: false,
+                is_dim: false,
+            },
+            MediaListItem {
+                title: "Second Track".into(),
+                subtitle: "Artist B".into(),
+                meta_top: "8M".into(),
+                meta_bottom: "2:45".into(),
+                cover_url: None,
+                glyph: UNICODE_ICONS.song,
+                is_playing: false,
+                is_dim: false,
+            },
+        ];
+
+        // 1. Preview enabled: 2-row item + 1 blank separator row (row 2 is blank, item 2 starts at row 3)
+        let mut covers = CoverRenderer::halfblocks_for_test();
+        let mut term = Terminal::new(TestBackend::new(60, 6)).unwrap();
+        term.draw(|f| {
+            render_media_list(
+                f,
+                Rect::new(0, 0, 60, 6),
+                &items,
+                0,
+                None,
+                true,
+                false,
+                "",
+                "",
+                UNICODE_ICONS,
+                BrailleSpinner::new(false),
+                &mut covers,
+            );
+        })
+        .unwrap();
+        let rendered = buffer_text(&term);
+        let lines: Vec<&str> = rendered.lines().collect();
+        assert!(lines[0].contains("First Track"));
+        assert!(lines[1].contains("Artist A"));
+        assert!(
+            lines[2].trim().is_empty(),
+            "Expected 1 blank gap row between preview items, got: {:?}",
+            lines[2]
+        );
+        assert!(lines[3].contains("Second Track"));
+        assert!(lines[4].contains("Artist B"));
+
+        // 2. Preview disabled (Off): compact 1-row mode (item 0 on row 0, item 1 on row 1)
+        covers.set_protocol(ImageProtocol::Off);
+        let mut term_compact = Terminal::new(TestBackend::new(60, 6)).unwrap();
+        term_compact
+            .draw(|f| {
+                render_media_list(
+                    f,
+                    Rect::new(0, 0, 60, 6),
+                    &items,
+                    0,
+                    None,
+                    true,
+                    false,
+                    "",
+                    "",
+                    UNICODE_ICONS,
+                    BrailleSpinner::new(false),
+                    &mut covers,
+                );
+            })
+            .unwrap();
+        let compact_text = buffer_text(&term_compact);
+        let compact_lines: Vec<&str> = compact_text.lines().collect();
+        assert!(compact_lines[0].contains("First Track"));
+        assert!(compact_lines[0].contains("3:10"));
+        assert!(compact_lines[1].contains("Second Track"));
+        assert!(compact_lines[1].contains("2:45"));
+    }
+
+    #[test]
+    fn global_magenta_theme_rethemes_panels_and_cava() {
+        use musick_tui::theme::{MAGENTA_THEME, TEAL_THEME, set_active_accent};
+
+        set_active_accent(ThemeAccent::Magenta);
+        let mut term = Terminal::new(TestBackend::new(40, 8)).unwrap();
+        term.draw(|f| {
+            f.render_widget(panel_block("Active", None, true), Rect::new(0, 0, 20, 8));
+            f.render_widget(
+                CavaWidget {
+                    bars: &[0.9, 0.8, 0.7, 0.9],
+                    accent: ThemeAccent::Magenta,
+                    idle: false,
+                },
+                Rect::new(20, 0, 20, 8),
+            );
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        assert_eq!(buf[(0, 0)].fg, MAGENTA_THEME.accent);
+        assert_ne!(buf[(0, 0)].fg, TEAL_THEME.accent);
+        // Verify Cava bars rendered magenta hues (r > g)
+        let has_magenta_bar = (20..40).any(|x| {
+            (0..8).any(|y| match buf[(x, y)].fg {
+                ratatui::style::Color::Rgb(r, g, b) => r > g && b > g && buf[(x, y)].symbol() != " ",
+                _ => false,
+            })
+        });
+        assert!(has_magenta_bar);
+        set_active_accent(ThemeAccent::Teal);
     }
 }

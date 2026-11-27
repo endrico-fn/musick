@@ -19,7 +19,7 @@ use ratatui_image::{Resize, ResizeEncodeRender, StatefulImage};
 
 use musick_core::ImageProtocol;
 
-use crate::theme::{ACCENT, DIM};
+use crate::theme::{DIM, active_theme};
 use crate::widgets::BrailleSpinner;
 
 const MAX_IMAGE_CACHE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(127);
@@ -173,7 +173,13 @@ impl CoverRenderer {
         };
         let detected_protocol = picker.protocol_type();
         let fs = picker.font_size();
-        let enabled = !matches!(pref, ImageProtocol::Off);
+        let has_native_graphics =
+            !is_dumb_or_linux_tty() && !matches!(detected_protocol, ProtocolType::Halfblocks);
+        let enabled = match pref {
+            ImageProtocol::Off => false,
+            ImageProtocol::Auto => has_native_graphics,
+            ImageProtocol::Kitty | ImageProtocol::Sixel | ImageProtocol::Halfblock => true,
+        };
         match pref {
             ImageProtocol::Auto | ImageProtocol::Off => {}
             ImageProtocol::Kitty => picker.set_protocol_type(ProtocolType::Kitty),
@@ -276,8 +282,7 @@ impl CoverRenderer {
     }
 
     pub fn set_protocol(&mut self, pref: ImageProtocol) -> bool {
-        let next_enabled = !matches!(pref, ImageProtocol::Off);
-        if next_enabled && !self.probed && !is_dumb_or_linux_tty() {
+        if !matches!(pref, ImageProtocol::Off) && !self.probed && !is_dumb_or_linux_tty() {
             if let Ok(queried) = Picker::from_query_stdio() {
                 let fs = queried.font_size();
                 self.detected_protocol = queried.protocol_type();
@@ -286,6 +291,14 @@ impl CoverRenderer {
             }
             self.probed = true;
         }
+        let next_enabled = match pref {
+            ImageProtocol::Off => false,
+            ImageProtocol::Auto => {
+                !is_dumb_or_linux_tty()
+                    && !matches!(self.detected_protocol, ProtocolType::Halfblocks)
+            }
+            ImageProtocol::Kitty | ImageProtocol::Sixel | ImageProtocol::Halfblock => true,
+        };
         let proto = match pref {
             ImageProtocol::Auto | ImageProtocol::Off => self.detected_protocol,
             ImageProtocol::Kitty => ProtocolType::Kitty,
@@ -469,9 +482,10 @@ impl CoverRenderer {
 
         let mid_y = area.y + area.height / 2;
         let encoding = url.is_some_and(|u| self.has_image(u) && !self.sixel_blocked_by_modal());
+        let accent = active_theme().accent;
         let label = if self.enabled && (loading || encoding) {
             Line::from(format!("{} loading", spinner.frame()))
-                .style(Style::default().fg(ACCENT).bg(Color::Reset))
+                .style(Style::default().fg(accent).bg(Color::Reset))
         } else {
             Line::from(placeholder_glyph.to_string())
                 .style(Style::default().fg(DIM).bg(Color::Reset))
@@ -513,7 +527,11 @@ impl CoverRenderer {
             frame.render_stateful_widget(widget, area, proto);
             return;
         }
-        let fg = if highlight { ACCENT } else { DIM };
+        let fg = if highlight {
+            active_theme().accent
+        } else {
+            DIM
+        };
         frame.render_widget(
             Paragraph::new(
                 Line::from(fallback_glyph.to_string())

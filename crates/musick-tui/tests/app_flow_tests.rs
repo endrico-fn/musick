@@ -2004,6 +2004,111 @@ async fn cross_entity_jumps_and_opt_in_session_restore_roundtrip() {
     app.dispatch_action(Action::Activate);
     assert!(store.get_kv("last_session_v1").unwrap().is_none());
 
+    // 4. Search track Activate plays ONLY selected track with autoplay=true (seeds radio, not search list!)
+    let mut pv = PlayerView::new();
+    pv.mode = PlayerPanelMode::SearchResults;
+    pv.set_search_results(vec![
+        SearchItem::Track(sample_track("s1", "Get Up")),
+        SearchItem::Track(sample_track("s2", "Unrelated Hit")),
+        SearchItem::Track(sample_track("s3", "Another Hit")),
+    ]);
+    match pv.handle_action(Action::Activate) {
+        ViewEffect::Command(AppCommand::PlayTracks {
+            tracks,
+            start_index,
+            autoplay,
+        }) => {
+            assert_eq!(tracks.len(), 1);
+            assert_eq!(tracks[0].video_id, "s1");
+            assert_eq!(start_index, 0);
+            assert!(autoplay);
+        }
+        other => panic!("expected single-track autoplay PlayTracks, got {other:?}"),
+    }
+
+    // 5. Quick A/a jumps on hovered Artist open Profile vs ArtistTab::Albums, and fallback to playing track in Lyrics/Settings
+    app.dispatch_action(Action::SwitchTab(0));
+    app.player.mode = PlayerPanelMode::SearchResults;
+    app.player.set_search_results(vec![SearchItem::Artist(
+        musick_core::ArtistSummary {
+            browse_id: "UC_ciara".into(),
+            name: "Ciara".into(),
+            subtitle: Some("Artist".into()),
+            thumbs: Vec::new(),
+        },
+    )]);
+    app.dispatch_action(Action::GoAlbum);
+    assert!(matches!(
+        app.nav_stack.last(),
+        Some(NavPage::Artist(v)) if v.browse_id == "UC_ciara" && v.active_tab == musick_tui::views::ArtistTab::Albums
+    ));
+    app.nav_stack.clear();
+    app.dispatch_action(Action::GoArtist);
+    assert!(matches!(
+        app.nav_stack.last(),
+        Some(NavPage::Artist(v)) if v.browse_id == "UC_ciara" && v.active_tab == musick_tui::views::ArtistTab::Overview
+    ));
+    // Fallback to currently playing track when on Settings tab (no hovered item)
+    app.dispatch_action(Action::SwitchTab(4));
+    app.dispatch_action(Action::GoArtist);
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::Artist(v)) if v.browse_id == "UCdp"));
+    app.nav_stack.clear();
+    app.dispatch_action(Action::GoAlbum);
+    assert!(matches!(app.nav_stack.last(), Some(NavPage::Album(v)) if v.browse_id == "MPREb1"));
+    app.nav_stack.clear();
+
+    // 6. Context menu (`e`) opens entity-aware actions & Settings sub-tabs + global ThemeAccent toggle work
+    app.dispatch_action(Action::SwitchTab(0));
+    app.dispatch_action(Action::OpenContextMenu);
+    assert!(matches!(
+        app.modal,
+        Some(ActiveModal::ContextMenu { ref title, ref items, .. })
+            if title == "Ciara" && items.iter().any(|it| it.label.contains("Shuffle"))
+    ));
+    app.dispatch_action(Action::InputCancel);
+    assert!(app.modal.is_none());
+
+    app.dispatch_action(Action::SwitchTab(4));
+    assert_eq!(
+        app.settings_view.section,
+        musick_tui::views::SettingsSection::All
+    );
+    app.dispatch_action(Action::NextSubTab);
+    assert_eq!(
+        app.settings_view.section,
+        musick_tui::views::SettingsSection::Account
+    );
+    app.settings_view.select_row(SettingRow::ThemeAccent);
+    app.dispatch_action(Action::Activate);
+    assert_eq!(
+        app.settings.display.accent,
+        musick_core::ThemeAccent::Magenta
+    );
+
+    // 7. Mouse click on progress bar & keyboard Ctrl+w j focus on Now Playing bar
+    let mut term = Terminal::new(TestBackend::new(110, 28)).unwrap();
+    term.draw(|f| app.render(f)).unwrap();
+    app.dispatch_action(Action::FocusPaneDown);
+    assert!(app.player_bar_focused);
+    app.dispatch_action(Action::Escape);
+    assert!(!app.player_bar_focused);
+
+    let sb = app.player_bar_hitboxes.seekbar;
+    assert!(sb.width > 10);
+    let seek_click = crossterm::event::MouseEvent {
+        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+        column: sb.x + sb.width / 2,
+        row: sb.y,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    app.handle_mouse(seek_click);
+    assert!(app.player_bar_focused);
+    assert_eq!(
+        app.player_bar_control,
+        musick_tui::widgets::PlayerBarControl::Seekbar
+    );
+    musick_tui::theme::set_active_accent(musick_core::ThemeAccent::Teal);
+
     engine_handle.send(AppCommand::Shutdown).await;
     let _ = engine_join.await;
 }

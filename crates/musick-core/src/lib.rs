@@ -43,9 +43,9 @@ pub fn build_http_client() -> reqwest::Client {
 }
 
 pub use config::{
-    AudioQuality, AuthMode, CacheSettings, CavaAudioSource, CavaPalette, CavaSmoothing,
+    AudioQuality, AuthMode, CacheSettings, CavaAudioSource, CavaSmoothing, DEFAULT_REGION,
     DisplaySettings, IconMode, ImageProtocol, LyricsSettings, LyricsSource, PlayerSettings,
-    PrivacySettings, Settings, SyncSettings, VALID_REGIONS,
+    PrivacySettings, Settings, SyncSettings, ThemeAccent, VALID_REGIONS,
 };
 pub use domain::{
     Album, AlbumSummary, Artist, ArtistRef, ArtistSummary, DiscoverFeed, LyricLine, Lyrics,

@@ -261,6 +261,25 @@ impl PlayQueue {
         }
     }
 
+    /// add tracks to the end of the user priority queue (fifo), ahead of context/radio tracks
+    pub fn enqueue(&mut self, tracks: Vec<Track>) {
+        if tracks.is_empty() {
+            return;
+        }
+        if self.items.is_empty() {
+            self.set_tracks(tracks, 0);
+            return;
+        }
+        let cur = self.index.unwrap_or(0);
+        let prio = self.priority_count();
+        let pos = (cur + 1 + prio).min(self.items.len());
+        let added_len = tracks.len();
+        for (offset, trk) in tracks.into_iter().enumerate() {
+            self.items.insert(pos + offset, trk);
+        }
+        self.priority_count = prio + added_len;
+    }
+
     pub fn play_next(&mut self, track: Track) {
         self.play_next_many(vec![track]);
     }
@@ -278,7 +297,6 @@ impl PlayQueue {
         let pos = self.index.map(|i| i + 1).unwrap_or(0).min(self.items.len());
         let added_len = tracks.len();
         for (offset, trk) in tracks.into_iter().enumerate() {
-            self.original.push(trk.clone());
             self.items.insert(pos + offset, trk);
         }
         self.priority_count += added_len;
@@ -327,6 +345,14 @@ impl PlayQueue {
         if idx >= self.items.len() || idx == cur {
             return false;
         }
+        if idx == cur + 1 {
+            if self.priority_count() == 0 {
+                self.snapshot_undo();
+                self.priority_count = 1;
+                return true;
+            }
+            return false;
+        }
         let dst = if idx > cur { cur + 1 } else { cur };
         self.move_item(idx, dst)
     }
@@ -336,6 +362,7 @@ impl PlayQueue {
         if src >= n || dst >= n || src == dst {
             return false;
         }
+        self.snapshot_undo();
         let old_cur = self.index;
         let old_prio_end = old_cur.map(|c| c + self.priority_count());
         let was_src_prio =
@@ -554,14 +581,30 @@ impl PlayQueue {
                 self.items.shuffle(&mut self.rng);
             }
         } else {
+            let prio_n = self.priority_count();
+            let prio_slice = self
+                .index
+                .map(|c| self.items[c + 1..c + 1 + prio_n].to_vec())
+                .unwrap_or_default();
             self.items = self.original.clone();
-            self.priority_count = 0;
             if let Some(cur_track) = cur {
-                self.index = self
+                let cur_pos = if let Some(pos) = self
                     .items
                     .iter()
                     .position(|t| t.video_id == cur_track.video_id)
-                    .or(Some(0));
+                {
+                    pos
+                } else {
+                    self.items.insert(0, cur_track);
+                    0
+                };
+                for (offset, trk) in prio_slice.iter().cloned().enumerate() {
+                    self.items.insert(cur_pos + 1 + offset, trk);
+                }
+                self.index = Some(cur_pos);
+                self.priority_count = prio_slice.len();
+            } else {
+                self.priority_count = 0;
             }
         }
         self.shuffle

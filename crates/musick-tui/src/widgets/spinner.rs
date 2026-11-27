@@ -1,7 +1,7 @@
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
-use crate::theme::{ACCENT, DIM};
+use crate::theme::{DIM, active_theme};
 
 pub const BRAILLE_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 pub const BRAILLE_STATIC: &str = "⣿";
@@ -36,7 +36,7 @@ impl BrailleSpinner {
         Line::from(vec![
             Span::styled(
                 format!("{} ", self.frame()),
-                Style::default().fg(ACCENT).bg(Color::Reset),
+                Style::default().fg(active_theme().accent).bg(Color::Reset),
             ),
             Span::styled(label, Style::default().fg(DIM).bg(Color::Reset)),
         ])

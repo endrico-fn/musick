@@ -170,13 +170,8 @@ impl AuthManager {
         }
     }
 
-    pub fn account_label(&self) -> Option<String> {
-        let guard = self.state.read().ok()?;
-        match &*guard {
-            AuthState::Anonymous => None,
-            AuthState::OAuth(c) => c.account_label.clone(),
-            AuthState::Browser(c) => c.account_label.clone(),
-        }
+    pub fn secret_backend_label(&self) -> &'static str {
+        self.store.backend_label()
     }
 
     /// returns brand account `onBehalfOfUser` / `X-Goog-PageId` in both oauth and browser modes
@@ -205,6 +200,20 @@ impl AuthManager {
         match &*guard {
             AuthState::Browser(c) => c
                 .visitor_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            AuthState::Anonymous | AuthState::OAuth(_) => None,
+        }
+    }
+
+    /// returns the browser session's user-agent when captured from devtools headers
+    pub fn browser_user_agent(&self) -> Option<String> {
+        let guard = self.state.read().ok()?;
+        match &*guard {
+            AuthState::Browser(c) => c
+                .user_agent
                 .as_deref()
                 .map(str::trim)
                 .filter(|s| !s.is_empty())

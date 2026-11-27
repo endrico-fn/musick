@@ -65,14 +65,16 @@ pub fn smoothing_params(s: CavaSmoothing) -> (u8, u8, f32, f32, f32) {
 }
 
 pub fn detect_cava_methods() -> Vec<&'static str> {
-    let rt = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/run/user/1000"));
     let mut methods = Vec::new();
-    if rt.join("pipewire-0").exists() {
-        methods.push("pipewire");
+    if let Some(rt) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        if rt.join("pipewire-0").exists() {
+            methods.push("pipewire");
+        }
+        if rt.join("pulse").join("native").exists() {
+            methods.push("pulse");
+        }
     }
-    if rt.join("pulse").join("native").exists() || std::env::var_os("PULSE_SERVER").is_some() {
+    if std::env::var_os("PULSE_SERVER").is_some() && !methods.contains(&"pulse") {
         methods.push("pulse");
     }
     for fb in ["pipewire", "pulse"] {
