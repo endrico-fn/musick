@@ -13,7 +13,8 @@ use crate::text::{Align, trunc_cells};
 use crate::theme::{ACCENT, CURSOR_BG, DIM, TEXT, panel_block};
 use crate::views::{RenderCtx, ViewEffect};
 use crate::widgets::{
-    CavaWidget, ColumnDef, CoverRenderer, LyricsBox, SectionTabs, TableRow, TrackTable,
+    CavaWidget, ColumnDef, CoverRenderer, LyricsBox, MediaListItem, SectionTabs, TableRow,
+    TrackTable, render_media_list,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -53,7 +54,6 @@ pub enum HomeFocusPane {
     #[default]
     Main,
     Lyrics,
-    Cava,
 }
 
 const DISCOVER_TABS: &[(&str, &str)] = &[("Mixes", "Mixes"), ("New Releases", "New Rel.")];
@@ -217,16 +217,7 @@ impl HomeView {
                 self.focus_pane = HomeFocusPane::Main;
                 return ViewEffect::None;
             }
-            Action::FocusPaneLeft => {
-                if self.focus_pane == HomeFocusPane::Cava {
-                    self.focus_pane = HomeFocusPane::Lyrics;
-                }
-                return ViewEffect::None;
-            }
-            Action::FocusPaneRight => {
-                if self.focus_pane == HomeFocusPane::Lyrics {
-                    self.focus_pane = HomeFocusPane::Cava;
-                }
+            Action::FocusPaneLeft | Action::FocusPaneRight => {
                 return ViewEffect::None;
             }
             Action::StartSearch => {
@@ -689,7 +680,10 @@ impl HomeView {
         let max_cover_w = ((u32::from(area.width) * 44) / 100)
             .min(u32::from(area.width.saturating_sub(24)))
             .max(12) as u16;
-        let max_square_h = ((f64::from(max_cover_w) / covers.cell_aspect()).floor() as u16).max(6);
+        let max_square_h = (((f64::from(max_cover_w.saturating_sub(4))) / covers.cell_aspect())
+            .floor() as u16)
+            .saturating_add(2)
+            .max(6);
         let base_top_h = ((u32::from(area.height) * 61) / 100)
             .max(6)
             .min(u32::from(area.height.saturating_sub(5))) as u16;
@@ -726,7 +720,7 @@ impl HomeView {
         );
 
         // Top-Right: Discover (Mixes | New Releases) / Search / Expanded Lyrics
-        self.render_main_panel(frame, top_cols[2], ctx);
+        self.render_main_panel(frame, top_cols[2], ctx, covers);
 
         // Bottom Row: Lyrics (or Track Details when expanded) + Cava Spectrum
         let bot_cols = Layout::default()
@@ -765,7 +759,7 @@ impl HomeView {
                     show_translation: ctx.snapshot.show_translation,
                     translating: ctx.snapshot.translating_lyrics,
                     blank_between: false,
-                    pad_left: 1,
+                    pad_left: 0,
                     scroll_offset: self.lyrics_scroll,
                     spinner: ctx.spinner,
                 },
@@ -774,11 +768,7 @@ impl HomeView {
         }
 
         // Bottom-Right: Cava Visualizer
-        let cava_block = panel_block(
-            "Cava",
-            Some(ctx.cava.mode_label),
-            self.focus_pane == HomeFocusPane::Cava,
-        );
+        let cava_block = panel_block("Cava", Some(ctx.cava.mode_label), false);
         let cava_inner = cava_block.inner(bot_cols[2]);
         frame.render_widget(cava_block, bot_cols[2]);
         frame.render_widget(
@@ -791,7 +781,13 @@ impl HomeView {
         );
     }
 
-    fn render_main_panel(&self, frame: &mut Frame<'_>, area: Rect, ctx: &RenderCtx<'_>) {
+    fn render_main_panel(
+        &self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        ctx: &RenderCtx<'_>,
+        covers: &mut CoverRenderer,
+    ) {
         let focused = self.focus_pane == HomeFocusPane::Main;
         let (title, subtitle) = match self.mode {
             HomePanelMode::Discover => {
@@ -832,7 +828,7 @@ impl HomeView {
             ),
         };
 
-        let block = panel_block(title, subtitle.as_deref(), focused);
+        let block = panel_block(title, subtitle.as_deref(), false);
         let inner = block.inner(area);
         frame.render_widget(block, area);
         if inner.width < 8 || inner.height < 2 {
@@ -849,7 +845,7 @@ impl HomeView {
                         show_translation: ctx.snapshot.show_translation,
                         translating: ctx.snapshot.translating_lyrics,
                         blank_between: true,
-                        pad_left: 2,
+                        pad_left: 1,
                         scroll_offset: self.lyrics_scroll,
                         spinner: ctx.spinner,
                     },
@@ -1060,42 +1056,23 @@ impl HomeView {
                     );
                 } else {
                     let playing_vid = ctx.snapshot.track.as_ref().map(|t| t.video_id.as_str());
-                    let rows: Vec<TableRow> = self
+                    let items: Vec<MediaListItem> = self
                         .search_results
                         .iter()
-                        .map(|item| item_to_table_row(item, playing_vid, ctx.icons))
+                        .map(|item| item_to_media_item(item, playing_vid, ctx.icons))
                         .collect();
-                    let cols = [
-                        ColumnDef {
-                            title: "Title",
-                            fixed_width: None,
-                            align: Align::Left,
-                        },
-                        ColumnDef {
-                            title: "Artist / Meta",
-                            fixed_width: Some(20),
-                            align: Align::Left,
-                        },
-                        ColumnDef {
-                            title: "Info",
-                            fixed_width: Some(8),
-                            align: Align::Right,
-                        },
-                    ];
-                    frame.render_widget(
-                        TrackTable {
-                            columns: &cols,
-                            rows: &rows,
-                            cursor: self.results_cursor,
-                            focused,
-                            show_header: false,
-                            loading: self.loading_search,
-                            loading_label: "Searching YouTube Music…",
-                            empty_text: "No matching results found",
-                            icons: ctx.icons,
-                            spinner: ctx.spinner,
-                        },
+                    render_media_list(
+                        frame,
                         parts[2],
+                        &items,
+                        self.results_cursor,
+                        focused,
+                        self.loading_search,
+                        "Searching YouTube Music…",
+                        "No matching results found",
+                        ctx.icons,
+                        ctx.spinner,
+                        covers,
                     );
                 }
             }
@@ -1109,24 +1086,24 @@ impl HomeView {
         if inner.width < 6 || inner.height == 0 {
             return;
         }
-        let w = usize::from(inner.width.saturating_sub(2));
+        let w = usize::from(inner.width);
         let lines = if let Some(ref tr) = ctx.snapshot.track {
             let mut out = vec![
                 Line::from(Span::styled(
-                    format!(" {}", trunc_cells(&tr.title, w)),
+                    trunc_cells(&tr.title, w),
                     Style::default()
                         .fg(TEXT)
                         .bg(Color::Reset)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
-                    format!(" {}", trunc_cells(&tr.artist_names(), w)),
+                    trunc_cells(&tr.artist_names(), w),
                     Style::default().fg(ACCENT).bg(Color::Reset),
                 )),
             ];
             if let Some(ref alb) = tr.album {
                 out.push(Line::from(Span::styled(
-                    format!(" Album: {}", trunc_cells(alb, w.saturating_sub(7))),
+                    format!("Album: {}", trunc_cells(alb, w.saturating_sub(7))),
                     Style::default().fg(DIM).bg(Color::Reset),
                 )));
             }
@@ -1138,17 +1115,93 @@ impl HomeView {
                 meta.push(format!("{plays} plays"));
             }
             out.push(Line::from(Span::styled(
-                format!(" {}", meta.join(" · ")),
+                trunc_cells(&meta.join(" · "), w),
                 Style::default().fg(DIM).bg(Color::Reset),
             )));
             out
         } else {
             vec![Line::from(Span::styled(
-                " Nothing playing",
+                "Nothing playing",
                 Style::default().fg(DIM).bg(Color::Reset),
             ))]
         };
         frame.render_widget(Paragraph::new(lines), inner);
+    }
+}
+
+fn item_to_media_item(
+    item: &SearchItem,
+    playing_vid: Option<&str>,
+    icons: crate::theme::IconSet,
+) -> MediaListItem {
+    match item {
+        SearchItem::Track(t) => {
+            let mut sub = t.artist_names();
+            if let Some(ref alb) = t.album
+                && !alb.is_empty()
+                && !alb.eq_ignore_ascii_case(&t.title)
+            {
+                sub = format!("{sub} · {alb}");
+            }
+            let meta_top = t.plays.clone().unwrap_or_else(|| {
+                if t.is_video() {
+                    "Video".to_string()
+                } else {
+                    String::new()
+                }
+            });
+            MediaListItem {
+                title: t.title.clone(),
+                subtitle: sub,
+                meta_top,
+                meta_bottom: t.duration_text(),
+                cover_url: t.cover_url(),
+                glyph: icons.icon_for_item(item),
+                is_playing: playing_vid == Some(t.video_id.as_str()),
+                is_dim: !t.is_available,
+            }
+        }
+        SearchItem::Album(a) => {
+            let art = a
+                .artists
+                .iter()
+                .map(|x| x.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            MediaListItem {
+                title: a.title.clone(),
+                subtitle: if art.is_empty() { a.subtitle() } else { art },
+                meta_top: a.kind.clone(),
+                meta_bottom: a.year.clone().unwrap_or_default(),
+                cover_url: a.cover_url(),
+                glyph: icons.album,
+                is_playing: false,
+                is_dim: false,
+            }
+        }
+        SearchItem::Artist(a) => MediaListItem {
+            title: a.name.clone(),
+            subtitle: a.subtitle.clone().unwrap_or_else(|| "Artist".to_string()),
+            meta_top: "Artist".to_string(),
+            meta_bottom: String::new(),
+            cover_url: a.cover_url(),
+            glyph: icons.artist,
+            is_playing: false,
+            is_dim: false,
+        },
+        SearchItem::Playlist(p) => MediaListItem {
+            title: p.title.clone(),
+            subtitle: p
+                .author
+                .clone()
+                .unwrap_or_else(|| "Community playlist".to_string()),
+            meta_top: "Playlist".to_string(),
+            meta_bottom: p.count.clone().unwrap_or_default(),
+            cover_url: p.cover_url(),
+            glyph: icons.playlist,
+            is_playing: false,
+            is_dim: false,
+        },
     }
 }
 

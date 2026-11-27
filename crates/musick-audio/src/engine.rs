@@ -4,18 +4,18 @@ use std::time::Duration;
 
 use rand::RngExt;
 use tokio::sync::{broadcast, mpsc, watch};
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tracing::debug;
 
 use musick_core::{
     AppCommand, AuthManager, CatalogApi, Lyrics, LyricsService, PlaybackSnapshot,
-    PlaybackTelemetryEvent, PlaybackTracking, PlayerEvent, PositionTick, QueueSnapshot, RepeatMode,
-    Settings, Track, UserStore,
+    PlaybackTelemetryEvent, PlaybackTracking, PlayerEvent, PositionTick, QueueSnapshot, RadioBatch,
+    RepeatMode, Settings, Track, UserStore,
 };
 
 use crate::backend::{AudioBackend, BackendEvent};
 use crate::queue::PlayQueue;
-use crate::resolver::HybridStreamResolver;
+use crate::resolver::{HybridStreamResolver, ResolvedStream};
 
 const RADIO_AUTOFILL_THRESHOLD: usize = 3;
 const CPN_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
@@ -81,6 +81,17 @@ pub struct PlayerEngineDeps {
 }
 
 enum InternalMsg {
+    StreamResolved {
+        epoch: u64,
+        track: Track,
+        result: Result<ResolvedStream, String>,
+    },
+    RadioStarted {
+        epoch: u64,
+        playlist_id: Option<String>,
+        seed_track: Option<Track>,
+        result: Result<RadioBatch, String>,
+    },
     LyricsLoaded {
         epoch: u64,
         video_id: String,
@@ -103,8 +114,10 @@ enum InternalMsg {
         tracking: PlaybackTracking,
     },
     GaplessResolved {
+        epoch: u64,
         video_id: String,
         url: String,
+        user_agent: Option<String>,
     },
 }
 
@@ -130,6 +143,8 @@ pub struct PlayerEngine {
 
     internal_tx: mpsc::UnboundedSender<InternalMsg>,
     load_gen: u64,
+    resolve_task: Option<AbortHandle>,
+    radio_start_task: Option<AbortHandle>,
     retried_video_id: Option<String>,
     last_stream_from_fast: bool,
     gapless_appended_video_id: Option<String>,
@@ -178,6 +193,8 @@ impl PlayerEngine {
             events_tx: events_tx.clone(),
             internal_tx,
             load_gen: 0,
+            resolve_task: None,
+            radio_start_task: None,
             retried_video_id: None,
             last_stream_from_fast: false,
             gapless_appended_video_id: None,
@@ -215,6 +232,7 @@ impl PlayerEngine {
                         break;
                     };
                     if matches!(cmd, AppCommand::Shutdown) {
+                        self.cancel_inflight_loads();
                         let _ = self.backend.stop().await;
                         break;
                     }
@@ -271,6 +289,15 @@ impl PlayerEngine {
         self.publish_snapshot();
     }
 
+    fn cancel_inflight_loads(&mut self) {
+        if let Some(h) = self.resolve_task.take() {
+            h.abort();
+        }
+        if let Some(h) = self.radio_start_task.take() {
+            h.abort();
+        }
+    }
+
     async fn handle_command(&mut self, cmd: AppCommand) {
         match cmd {
             AppCommand::PlayTracks {
@@ -313,42 +340,59 @@ impl PlayerEngine {
                 playlist_id,
                 seed_track,
             } => {
+                self.cancel_inflight_loads();
+                self.load_gen += 1;
+                let epoch = self.load_gen;
                 self.snapshot.resolving = true;
+                self.snapshot.restored = false;
                 self.snapshot.error = None;
                 self.publish_snapshot();
-                match self
-                    .catalog
-                    .radio(video_id.as_deref(), playlist_id.as_deref(), None, 25)
-                    .await
-                {
-                    Ok(batch) => {
-                        let mut tracks = batch.tracks;
-                        if let Some(seed) = seed_track
-                            && !tracks.iter().any(|t| t.video_id == seed.video_id)
-                        {
-                            tracks.insert(0, seed);
-                        }
-                        self.radio_continuation = batch.continuation;
-                        self.radio_playlist_id = batch.playlist_id.or(playlist_id);
-                        self.snapshot.autoplay_active = true;
-                        self.queue.set_tracks(tracks, 0);
-                        self.publish_queue();
-                        if let Some(cur) = self.queue.current().cloned() {
-                            self.load_track(cur, false).await;
-                        } else {
-                            self.snapshot.resolving = false;
-                            self.publish_snapshot();
-                        }
-                    }
-                    Err(err) => {
-                        self.snapshot.resolving = false;
-                        self.snapshot.error = Some(format!("Radio failed: {err}"));
-                        self.publish_snapshot();
-                    }
+
+                let catalog = self.catalog.clone();
+                let tx = self.internal_tx.clone();
+                let pid = playlist_id.clone();
+                let jh = tokio::spawn(async move {
+                    let res = catalog
+                        .radio(video_id.as_deref(), pid.as_deref(), None, 25)
+                        .await
+                        .map_err(|e| e.to_string());
+                    let _ = tx.send(InternalMsg::RadioStarted {
+                        epoch,
+                        playlist_id,
+                        seed_track,
+                        result: res,
+                    });
+                });
+                self.radio_start_task = Some(jh.abort_handle());
+            }
+            AppCommand::RestoreTrack { track } => {
+                if !self.queue.is_empty() || self.snapshot.track.is_some() {
+                    return;
                 }
+                self.cancel_inflight_loads();
+                let dur = track.duration.map(f64::from).unwrap_or(0.0);
+                self.queue.set_tracks(vec![track.clone()], 0);
+                self.snapshot.track = Some(track);
+                self.snapshot.track_rev += 1;
+                self.snapshot.restored = true;
+                self.snapshot.playing = false;
+                self.snapshot.paused = true;
+                self.snapshot.resolving = false;
+                self.snapshot.error = None;
+                self.snapshot.audio_info.clear();
+                self.position = PositionTick {
+                    position_secs: 0.0,
+                    duration_secs: dur,
+                    buffering: false,
+                    active_lyric_idx: None,
+                };
+                let _ = self.pos_tx.send(self.position);
+                self.publish_queue();
             }
             AppCommand::TogglePause => {
-                if self.snapshot.track.is_none()
+                if (self.snapshot.restored
+                    || self.snapshot.track.is_none()
+                    || self.snapshot.error.is_some())
                     && let Some(cur) = self.queue.current().cloned()
                 {
                     self.load_track(cur, false).await;
@@ -362,12 +406,15 @@ impl PlayerEngine {
             }
             AppCommand::Next => {
                 self.flush_watchtime_if_needed().await;
+                self.invalidate_gapless_tail().await;
                 if let Some(next) = self.queue.advance(true) {
                     self.pending_autofill_advance = false;
                     self.publish_queue();
                     self.load_track(next, false).await;
                 } else if self.snapshot.autoplay_active && self.settings.player.autoplay {
                     self.pending_autofill_advance = true;
+                    self.snapshot.resolving = true;
+                    self.publish_snapshot();
                     self.maybe_autofill_radio().await;
                 }
             }
@@ -377,8 +424,11 @@ impl PlayerEngine {
                     return;
                 }
                 if let Some(prev) = self.queue.retreat() {
+                    self.invalidate_gapless_tail().await;
                     self.publish_queue();
                     self.load_track(prev, false).await;
+                } else if self.snapshot.track.is_some() && !self.snapshot.restored {
+                    let _ = self.backend.seek(0.0, false).await;
                 }
             }
             AppCommand::SeekRelative { seconds } => {
@@ -416,6 +466,7 @@ impl PlayerEngine {
             }
             AppCommand::JumpToQueueIndex { index } => {
                 if let Some(track) = self.queue.jump(index) {
+                    self.invalidate_gapless_tail().await;
                     self.publish_queue();
                     self.load_track(track, false).await;
                 }
@@ -436,9 +487,15 @@ impl PlayerEngine {
                         if let Some(cur) = self.queue.current().cloned() {
                             self.load_track(cur, false).await;
                         } else {
+                            self.cancel_inflight_loads();
+                            self.load_gen += 1;
                             let _ = self.backend.stop_track().await;
                             self.snapshot.track = None;
                             self.snapshot.playing = false;
+                            self.snapshot.resolving = false;
+                            self.snapshot.restored = false;
+                            self.position.buffering = false;
+                            let _ = self.pos_tx.send(self.position);
                             self.publish_snapshot();
                         }
                     } else {
@@ -478,12 +535,20 @@ impl PlayerEngine {
                 }
             }
             AppCommand::ClearQueue => {
+                self.cancel_inflight_loads();
+                self.load_gen += 1;
                 self.queue.clear();
+                self.invalidate_gapless_tail().await;
                 let _ = self.backend.stop_track().await;
                 self.snapshot.track = None;
                 self.snapshot.playing = false;
                 self.snapshot.paused = false;
+                self.snapshot.resolving = false;
+                self.snapshot.restored = false;
                 self.snapshot.autoplay_active = false;
+                self.snapshot.error = None;
+                self.position = PositionTick::default();
+                let _ = self.pos_tx.send(self.position);
                 self.publish_queue();
                 self.publish_lyrics(None, Lyrics::default());
             }
@@ -530,6 +595,7 @@ impl PlayerEngine {
     }
 
     async fn load_track(&mut self, track: Track, is_retry: bool) {
+        self.cancel_inflight_loads();
         self.load_gen += 1;
         let epoch = self.load_gen;
         self.pending_autofill_advance = false;
@@ -543,6 +609,7 @@ impl PlayerEngine {
         self.snapshot.track = Some(track.clone());
         self.snapshot.track_rev += 1;
         self.snapshot.resolving = true;
+        self.snapshot.playing = false;
         self.snapshot.restored = false;
         self.snapshot.error = None;
         self.snapshot.audio_info.clear();
@@ -565,47 +632,25 @@ impl PlayerEngine {
         }
 
         let force_fallback = is_retry && self.last_stream_from_fast;
-        let resolve_res = if force_fallback {
-            self.resolver.resolve_fallback_only(&track.video_id).await
-        } else {
-            self.resolver.resolve(&track.video_id).await
-        };
-
-        match resolve_res {
-            Ok(stream) => {
-                self.last_stream_from_fast = stream.from_fast_path;
-                self.snapshot.audio_info = stream.quality_label();
-                self.snapshot.resolving = false;
-                let _ = self
-                    .backend
-                    .set_user_agent(stream.user_agent.as_deref())
-                    .await;
-                if let Err(err) = self.backend.load_url(&stream.url).await {
-                    self.handle_load_or_playback_error(&track, err.to_string())
-                        .await;
-                    return;
-                }
-                self.snapshot.playing = true;
-                self.snapshot.paused = false;
-                self.publish_snapshot();
-
-                self.spawn_telemetry_start(epoch, track.video_id.clone());
-                self.schedule_prefetch_and_gapless();
-                self.maybe_autofill_radio().await;
+        let resolver = self.resolver.clone();
+        let tx = self.internal_tx.clone();
+        let jh = tokio::spawn(async move {
+            let res = if force_fallback {
+                resolver.resolve_fallback_only(&track.video_id).await
+            } else {
+                resolver.resolve(&track.video_id).await
             }
-            Err(err) => {
-                self.position.buffering = false;
-                let _ = self.pos_tx.send(self.position);
-                self.snapshot.resolving = false;
-                self.snapshot.playing = false;
-                self.snapshot.error = Some(err.to_string());
-                self.publish_snapshot();
-            }
-        }
+            .map_err(|e| e.to_string());
+            let _ = tx.send(InternalMsg::StreamResolved {
+                epoch,
+                track,
+                result: res,
+            });
+        });
+        self.resolve_task = Some(jh.abort_handle());
     }
 
-    /// Review Focus #1: if playback fails on a cached/expired 403 or fast-path URL,
-    /// evict cache (tripping fast-path circuit breaker if applicable) and retry once via fallback.
+    /// evict stale or fast-path url and retry once via fallback on playback failure
     async fn handle_load_or_playback_error(&mut self, track: &Track, err: String) {
         if self.retried_video_id.as_deref() != Some(track.video_id.as_str()) {
             debug!(
@@ -629,6 +674,9 @@ impl PlayerEngine {
     async fn handle_backend_event(&mut self, ev: BackendEvent) {
         match ev {
             BackendEvent::Properties(props) => {
+                if self.snapshot.resolving {
+                    return;
+                }
                 let active_idx = self.current_lyrics.1.active_line_index(props.position);
                 self.position = PositionTick {
                     position_secs: props.position,
@@ -659,6 +707,9 @@ impl PlayerEngine {
                 }
             }
             BackendEvent::Eof => {
+                if self.snapshot.resolving {
+                    return;
+                }
                 self.flush_watchtime_if_needed().await;
                 if let Some(next) = self.queue.advance(false) {
                     self.pending_autofill_advance = false;
@@ -666,7 +717,6 @@ impl PlayerEngine {
                     let was_gapless =
                         self.gapless_appended_video_id.as_deref() == Some(next.video_id.as_str());
                     if was_gapless && self.queue.repeat_mode() != RepeatMode::One {
-                        // mpv already transitioned gaplessly to the next item; just update metadata/lyrics!
                         self.transition_metadata_after_gapless(next).await;
                     } else {
                         self.load_track(next, false).await;
@@ -674,6 +724,7 @@ impl PlayerEngine {
                 } else if self.snapshot.autoplay_active && self.settings.player.autoplay {
                     self.pending_autofill_advance = true;
                     self.snapshot.playing = false;
+                    self.snapshot.resolving = true;
                     self.publish_snapshot();
                     self.maybe_autofill_radio().await;
                 } else {
@@ -682,6 +733,9 @@ impl PlayerEngine {
                 }
             }
             BackendEvent::FileError(err) => {
+                if self.snapshot.resolving {
+                    return;
+                }
                 if let Some(cur) = self.snapshot.track.clone() {
                     self.handle_load_or_playback_error(&cur, err).await;
                 } else {
@@ -702,6 +756,7 @@ impl PlayerEngine {
     }
 
     async fn transition_metadata_after_gapless(&mut self, track: Track) {
+        self.cancel_inflight_loads();
         self.load_gen += 1;
         let epoch = self.load_gen;
         self.retried_video_id = None;
@@ -714,6 +769,7 @@ impl PlayerEngine {
         self.snapshot.playing = true;
         self.snapshot.paused = false;
         self.snapshot.resolving = false;
+        self.snapshot.restored = false;
         self.snapshot.error = None;
         if let Some(cached) = self.resolver.get_cached(&track.video_id) {
             self.snapshot.audio_info = cached.quality_label();
@@ -721,6 +777,13 @@ impl PlayerEngine {
         } else {
             self.last_stream_from_fast = false;
         }
+        self.position = PositionTick {
+            position_secs: 0.0,
+            duration_secs: track.duration.map(f64::from).unwrap_or(0.0),
+            buffering: false,
+            active_lyric_idx: None,
+        };
+        let _ = self.pos_tx.send(self.position);
         self.publish_snapshot();
 
         if self.settings.privacy.save_history {
@@ -735,6 +798,84 @@ impl PlayerEngine {
 
     async fn handle_internal(&mut self, msg: InternalMsg) {
         match msg {
+            InternalMsg::StreamResolved {
+                epoch,
+                track,
+                result,
+            } => {
+                if epoch != self.load_gen {
+                    return;
+                }
+                self.resolve_task = None;
+                match result {
+                    Ok(stream) => {
+                        self.last_stream_from_fast = stream.from_fast_path;
+                        self.snapshot.audio_info = stream.quality_label();
+                        self.snapshot.resolving = false;
+                        let _ = self
+                            .backend
+                            .set_user_agent(stream.user_agent.as_deref())
+                            .await;
+                        if let Err(err) = self.backend.load_url(&stream.url).await {
+                            self.handle_load_or_playback_error(&track, err.to_string())
+                                .await;
+                            return;
+                        }
+                        self.snapshot.playing = true;
+                        self.snapshot.paused = false;
+                        self.publish_snapshot();
+
+                        self.spawn_telemetry_start(epoch, track.video_id.clone());
+                        self.schedule_prefetch_and_gapless();
+                        self.maybe_autofill_radio().await;
+                    }
+                    Err(err) => {
+                        self.position.buffering = false;
+                        let _ = self.pos_tx.send(self.position);
+                        self.snapshot.resolving = false;
+                        self.snapshot.playing = false;
+                        self.snapshot.error = Some(err);
+                        self.publish_snapshot();
+                    }
+                }
+            }
+            InternalMsg::RadioStarted {
+                epoch,
+                playlist_id,
+                seed_track,
+                result,
+            } => {
+                if epoch != self.load_gen {
+                    return;
+                }
+                self.radio_start_task = None;
+                match result {
+                    Ok(batch) => {
+                        let mut tracks = batch.tracks;
+                        if let Some(seed) = seed_track
+                            && !tracks.iter().any(|t| t.video_id == seed.video_id)
+                        {
+                            tracks.insert(0, seed);
+                        }
+                        self.radio_continuation = batch.continuation;
+                        self.radio_playlist_id = batch.playlist_id.or(playlist_id);
+                        self.snapshot.autoplay_active = true;
+                        self.queue.set_tracks(tracks, 0);
+                        self.publish_queue();
+                        if let Some(cur) = self.queue.current().cloned() {
+                            self.load_track(cur, false).await;
+                        } else {
+                            self.snapshot.resolving = false;
+                            self.publish_snapshot();
+                        }
+                    }
+                    Err(err) => {
+                        self.snapshot.resolving = false;
+                        self.snapshot.error = Some(format!("Radio failed: {err}"));
+                        self.publish_snapshot();
+                    }
+                }
+            }
             InternalMsg::LyricsLoaded {
                 epoch,
                 video_id,
@@ -802,8 +943,10 @@ impl PlayerEngine {
                         }
                     }
                     self.schedule_prefetch_and_gapless();
-                } else {
+                } else if self.pending_autofill_advance {
                     self.pending_autofill_advance = false;
+                    self.snapshot.resolving = false;
+                    self.publish_snapshot();
                 }
             }
             InternalMsg::TrackingLoaded {
@@ -816,16 +959,27 @@ impl PlayerEngine {
                     self.active_tracking = Some((video_id, cpn, tracking));
                 }
             }
-            InternalMsg::GaplessResolved { video_id, url } => {
-                if self.settings.player.gapless
+            InternalMsg::GaplessResolved {
+                epoch,
+                video_id,
+                url,
+                user_agent,
+            } => {
+                if epoch == self.load_gen
+                    && self.settings.player.gapless
+                    && self.queue.repeat_mode() != RepeatMode::One
                     && self
                         .queue
                         .peek_next()
                         .is_some_and(|t| t.video_id == video_id)
                     && self.gapless_appended_video_id.as_deref() != Some(video_id.as_str())
-                    && self.backend.append_gapless(&url).await.is_ok()
                 {
-                    self.gapless_appended_video_id = Some(video_id);
+                    if user_agent.is_some() {
+                        let _ = self.backend.set_user_agent(user_agent.as_deref()).await;
+                    }
+                    if self.backend.append_gapless(&url).await.is_ok() {
+                        self.gapless_appended_video_id = Some(video_id);
+                    }
                 }
             }
         }
@@ -919,16 +1073,20 @@ impl PlayerEngine {
             return;
         };
         if self.settings.player.gapless
+            && self.queue.repeat_mode() != RepeatMode::One
             && self.gapless_appended_video_id.as_deref() != Some(next_track.video_id.as_str())
         {
             let resolver = self.resolver.clone();
             let tx = self.internal_tx.clone();
             let vid = next_track.video_id;
+            let epoch = self.load_gen;
             tokio::spawn(async move {
                 if let Ok(stream) = resolver.resolve(&vid).await {
                     let _ = tx.send(InternalMsg::GaplessResolved {
+                        epoch,
                         video_id: vid,
                         url: stream.url,
+                        user_agent: stream.user_agent,
                     });
                 }
             });

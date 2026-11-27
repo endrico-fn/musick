@@ -7,12 +7,12 @@ use ratatui::widgets::Paragraph;
 use musick_core::{AlbumSummary, AppCommand, Artist, CoverSize, SavedCollectionKind, Track};
 
 use crate::keymap::Action;
-use crate::text::{Align, trunc_cells};
-use crate::theme::{ACCENT, DIM, TEXT, panel_block};
+use crate::text::{Align, trunc_cells, wrap_cells};
+use crate::theme::{ACCENT, BORDER_DIM, DIM, TEXT, panel_block};
 use crate::views::{RenderCtx, ViewEffect};
 use crate::widgets::{
-    ColumnDef, CoverRenderer, GridCardItem, SectionTabs, TableRow, TrackTable, grid_columns_for,
-    render_cover_grid,
+    ColumnDef, CoverRenderer, GridCardItem, MediaListItem, SectionTabs, TableRow, TrackTable,
+    grid_columns_for, render_cover_grid, render_media_list,
 };
 
 const SPLIT_BREAKPOINT: u16 = 106;
@@ -472,9 +472,9 @@ impl ArtistView {
         let info_sub = if self.saved {
             "Saved ✓"
         } else {
-            "w save · r radio"
+            "w follow · r radio"
         };
-        let info_block = panel_block(&self.title_hint, Some(info_sub), false);
+        let info_block = panel_block("Profile", Some(info_sub), false);
         let info_inner = info_block.inner(hero_cols[2]);
         frame.render_widget(info_block, hero_cols[2]);
 
@@ -484,9 +484,10 @@ impl ArtistView {
                 info_inner,
             );
         } else if let Some(ref art) = self.artist {
-            let w = usize::from(info_inner.width.saturating_sub(2));
+            let w = usize::from(info_inner.width);
+            let max_lines = usize::from(info_inner.height);
             let mut lines = vec![Line::from(Span::styled(
-                format!(" {}", trunc_cells(&art.summary.name, w)),
+                trunc_cells(&art.summary.name, w),
                 Style::default()
                     .fg(TEXT)
                     .bg(Color::Reset)
@@ -503,24 +504,44 @@ impl ArtistView {
                     stats.push(format!("{s} subscribers"));
                 }
             }
-            if !stats.is_empty() {
+            if !stats.is_empty() && lines.len() < max_lines {
                 lines.push(Line::from(Span::styled(
-                    format!(" {}", trunc_cells(&stats.join(" · "), w)),
+                    trunc_cells(&stats.join(" · "), w),
                     Style::default().fg(ACCENT).bg(Color::Reset),
                 )));
             }
             if let Some(ref desc) = art.description {
-                let first_line = desc.lines().next().unwrap_or("");
-                lines.push(Line::from(Span::styled(
-                    format!(" {}", trunc_cells(first_line, w)),
-                    Style::default().fg(DIM).bg(Color::Reset),
-                )));
+                let prose: String = desc.split_whitespace().collect::<Vec<_>>().join(" ");
+                if !prose.is_empty() && lines.len() < max_lines {
+                    if max_lines.saturating_sub(lines.len()) >= 3 {
+                        lines.push(Line::from(""));
+                    }
+                    let rem_rows = max_lines.saturating_sub(lines.len());
+                    if rem_rows > 0 {
+                        let wrapped = wrap_cells(&prose, w);
+                        let clipped = wrapped.len() > rem_rows;
+                        for (idx, mut ln) in wrapped.into_iter().take(rem_rows).enumerate() {
+                            if clipped && idx + 1 == rem_rows {
+                                let trimmed = ln.trim_end_matches(['.', ',', ' ']);
+                                ln = trunc_cells(&format!("{trimmed}…"), w);
+                            }
+                            lines.push(Line::from(Span::styled(
+                                ln,
+                                Style::default().fg(DIM).bg(Color::Reset),
+                            )));
+                        }
+                    }
+                }
             }
             frame.render_widget(Paragraph::new(lines), info_inner);
         }
 
         // Body Panel: 7 Sub-tabs + Content
-        let body_block = panel_block("Discography & Tracks", Some("Tab switch · Bksp back"), true);
+        let body_block = panel_block(
+            "Discography & Tracks",
+            Some("Tab switch · Bksp back"),
+            false,
+        );
         let body_inner = body_block.inner(v_parts[1]);
         frame.render_widget(body_block, v_parts[1]);
         self.last_width = body_inner.width;
@@ -562,28 +583,86 @@ impl ArtistView {
 
         match self.active_tab {
             ArtistTab::Overview => {
-                // Responsive split overview at >= 106 columns!
                 let top_songs = &art.songs[..art.songs.len().min(10)];
                 if area.width >= SPLIT_BREAKPOINT && content_area.width >= 60 {
                     let cols = Layout::default()
                         .direction(Direction::Horizontal)
                         .constraints([
-                            Constraint::Percentage(58),
-                            Constraint::Length(1),
-                            Constraint::Min(20),
+                            Constraint::Percentage(60),
+                            Constraint::Length(3),
+                            Constraint::Min(22),
                         ])
                         .split(content_area);
-                    self.render_track_list(frame, cols[0], top_songs, playing_vid, ctx);
-                    self.render_overview_side(frame, cols[2], art);
+
+                    let left_split = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(1), Constraint::Min(1)])
+                        .split(cols[0]);
+                    frame.render_widget(
+                        Paragraph::new(Line::from(Span::styled(
+                            "Top Songs",
+                            Style::default()
+                                .fg(ACCENT)
+                                .bg(Color::Reset)
+                                .add_modifier(Modifier::BOLD),
+                        ))),
+                        left_split[0],
+                    );
+                    self.render_track_media_list(
+                        frame,
+                        left_split[1],
+                        top_songs,
+                        playing_vid,
+                        ctx,
+                        covers,
+                        true,
+                    );
+
+                    // clean vertical divider with 1-cell breathing gap on both sides
+                    let div_x = cols[1].x + 1;
+                    let buf = frame.buffer_mut();
+                    for dy in cols[1].y..cols[1].y + cols[1].height {
+                        if let Some(cell) = buf.cell_mut((div_x, dy)) {
+                            cell.set_symbol("│");
+                            cell.set_fg(BORDER_DIM);
+                            cell.set_bg(Color::Reset);
+                        }
+                    }
+
+                    self.render_overview_side(frame, cols[2], art, ctx, covers);
                 } else {
-                    self.render_track_list(frame, content_area, top_songs, playing_vid, ctx);
+                    self.render_track_media_list(
+                        frame,
+                        content_area,
+                        top_songs,
+                        playing_vid,
+                        ctx,
+                        covers,
+                        true,
+                    );
                 }
             }
             ArtistTab::Songs => {
-                self.render_track_list(frame, content_area, &art.songs, playing_vid, ctx);
+                self.render_track_media_list(
+                    frame,
+                    content_area,
+                    &art.songs,
+                    playing_vid,
+                    ctx,
+                    covers,
+                    true,
+                );
             }
             ArtistTab::Videos => {
-                self.render_track_list(frame, content_area, &art.videos, playing_vid, ctx);
+                self.render_track_media_list(
+                    frame,
+                    content_area,
+                    &art.videos,
+                    playing_vid,
+                    ctx,
+                    covers,
+                    false,
+                );
             }
             ArtistTab::Albums | ArtistTab::Singles => {
                 let items = self.sorted_releases(self.active_tab == ArtistTab::Singles);
@@ -704,142 +783,241 @@ impl ArtistView {
                 );
             }
             ArtistTab::Similar => {
-                let rows: Vec<TableRow> = art
+                let items: Vec<MediaListItem> = art
                     .related
                     .iter()
-                    .map(|r| {
-                        let mut row = TableRow::new(vec![
-                            r.name.clone(),
-                            r.subtitle.clone().unwrap_or_default(),
-                        ]);
-                        row.prefix_icon = Some(ctx.icons.artist);
-                        row
+                    .map(|r| MediaListItem {
+                        title: r.name.clone(),
+                        subtitle: r.subtitle.clone().unwrap_or_else(|| "Artist".to_string()),
+                        meta_top: "Artist".to_string(),
+                        meta_bottom: String::new(),
+                        cover_url: r.cover_url(),
+                        glyph: ctx.icons.artist,
+                        is_playing: false,
+                        is_dim: false,
                     })
                     .collect();
-                let cols = [
-                    ColumnDef {
-                        title: "Artist",
-                        fixed_width: None,
-                        align: Align::Left,
-                    },
-                    ColumnDef {
-                        title: "Audience",
-                        fixed_width: Some(20),
-                        align: Align::Right,
-                    },
-                ];
-                frame.render_widget(
-                    TrackTable {
-                        columns: &cols,
-                        rows: &rows,
-                        cursor: self.cursor,
-                        focused: true,
-                        show_header: true,
-                        loading: false,
-                        loading_label: "",
-                        empty_text: "No similar artists found",
-                        icons: ctx.icons,
-                        spinner: ctx.spinner,
-                    },
+                render_media_list(
+                    frame,
                     content_area,
+                    &items,
+                    self.cursor,
+                    true,
+                    false,
+                    "",
+                    "No similar artists found",
+                    ctx.icons,
+                    ctx.spinner,
+                    covers,
                 );
             }
         }
     }
 
-    fn render_track_list(
+    #[allow(clippy::too_many_arguments)]
+    fn render_track_media_list(
         &self,
         frame: &mut Frame<'_>,
         area: Rect,
         tracks: &[Track],
         playing_vid: Option<&str>,
         ctx: &RenderCtx<'_>,
+        covers: &mut CoverRenderer,
+        numbered: bool,
     ) {
-        let rows: Vec<TableRow> = tracks
+        let items: Vec<MediaListItem> = tracks
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let mut r = TableRow::new(vec![
-                    format!("{:>2}. {}", i + 1, t.title),
-                    t.plays.clone().unwrap_or_default(),
-                    t.duration_text(),
-                ]);
-                r.is_playing = playing_vid == Some(t.video_id.as_str());
-                r
+                let title = if numbered {
+                    format!("{:>2}. {}", i + 1, t.title)
+                } else {
+                    t.title.clone()
+                };
+                let subtitle = match t.album.as_deref().filter(|a| !a.is_empty()) {
+                    Some(alb) if !alb.eq_ignore_ascii_case(&t.title) => {
+                        format!("{} · {alb}", t.artist_names())
+                    }
+                    _ => t.artist_names(),
+                };
+                MediaListItem {
+                    title,
+                    subtitle,
+                    meta_top: t.plays.clone().unwrap_or_default(),
+                    meta_bottom: t.duration_text(),
+                    cover_url: t.cover_url(),
+                    glyph: if t.is_video() {
+                        ctx.icons.video
+                    } else {
+                        ctx.icons.song
+                    },
+                    is_playing: playing_vid == Some(t.video_id.as_str()),
+                    is_dim: !t.is_available,
+                }
             })
             .collect();
-        let cols = [
-            ColumnDef {
-                title: "Title",
-                fixed_width: None,
-                align: Align::Left,
-            },
-            ColumnDef {
-                title: "Plays",
-                fixed_width: Some(8),
-                align: Align::Right,
-            },
-            ColumnDef {
-                title: "Time",
-                fixed_width: Some(6),
-                align: Align::Right,
-            },
-        ];
-        frame.render_widget(
-            TrackTable {
-                columns: &cols,
-                rows: &rows,
-                cursor: self.cursor,
-                focused: true,
-                show_header: true,
-                loading: false,
-                loading_label: "",
-                empty_text: "No tracks available",
-                icons: ctx.icons,
-                spinner: ctx.spinner,
-            },
+        render_media_list(
+            frame,
             area,
+            &items,
+            self.cursor,
+            true,
+            false,
+            "",
+            "No tracks available",
+            ctx.icons,
+            ctx.spinner,
+            covers,
         );
     }
 
-    fn render_overview_side(&self, frame: &mut Frame<'_>, area: Rect, art: &Artist) {
-        let w = usize::from(area.width.saturating_sub(2));
-        let mut lines = vec![Line::from(Span::styled(
-            "Latest & Top Releases",
-            Style::default()
-                .fg(ACCENT)
-                .bg(Color::Reset)
-                .add_modifier(Modifier::BOLD),
-        ))];
-        for al in art.albums.iter().chain(art.singles.iter()).take(5) {
+    fn render_overview_side(
+        &self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        art: &Artist,
+        ctx: &RenderCtx<'_>,
+        covers: &mut CoverRenderer,
+    ) {
+        if area.width < 10 || area.height == 0 {
+            return;
+        }
+        let w = usize::from(area.width);
+        let mut y = area.y;
+        let max_y = area.y + area.height;
+
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                trunc_cells("Latest & Top Releases", w),
+                Style::default()
+                    .fg(ACCENT)
+                    .bg(Color::Reset)
+                    .add_modifier(Modifier::BOLD),
+            ))),
+            Rect {
+                x: area.x,
+                y,
+                width: area.width,
+                height: 1,
+            },
+        );
+        y += 1;
+
+        let mut releases: Vec<&AlbumSummary> =
+            art.albums.iter().chain(art.singles.iter()).collect();
+        releases.sort_by(|a, b| {
+            let ya = a.year.as_deref().unwrap_or("");
+            let yb = b.year.as_deref().unwrap_or("");
+            yb.cmp(ya)
+        });
+
+        let mut list_start = 0usize;
+        if let Some(latest) = releases.first()
+            && y + 2 <= max_y
+        {
+            list_start = 1;
+            let show_mini = covers.is_enabled() && area.width >= 18;
+            let mini_w = if show_mini {
+                covers
+                    .mini_cover_width(2)
+                    .min(area.width.saturating_sub(10))
+            } else {
+                0
+            };
+            if show_mini {
+                covers.render_mini_cover(
+                    frame,
+                    Rect {
+                        x: area.x,
+                        y,
+                        width: mini_w,
+                        height: 2,
+                    },
+                    latest.cover_url().as_deref(),
+                    ctx.icons.album,
+                    true,
+                );
+            }
+            let tx = area.x + if show_mini { mini_w + 1 } else { 0 };
+            let tw = usize::from(
+                area.width
+                    .saturating_sub(if show_mini { mini_w + 1 } else { 0 }),
+            );
+            frame.render_widget(
+                Paragraph::new(vec![
+                    Line::from(Span::styled(
+                        trunc_cells(&latest.title, tw),
+                        Style::default()
+                            .fg(TEXT)
+                            .bg(Color::Reset)
+                            .add_modifier(Modifier::BOLD),
+                    )),
+                    Line::from(Span::styled(
+                        trunc_cells(&latest.subtitle(), tw),
+                        Style::default().fg(DIM).bg(Color::Reset),
+                    )),
+                ]),
+                Rect {
+                    x: tx,
+                    y,
+                    width: tw as u16,
+                    height: 2,
+                },
+            );
+            y += 2;
+        }
+
+        let mut lines = Vec::new();
+        for al in releases.iter().skip(list_start).take(4) {
+            let yr = al.year.as_deref().unwrap_or(&al.kind);
+            let suffix = format!(" ({yr})");
+            let title_budget = w.saturating_sub(suffix.len() + 3);
             lines.push(Line::from(vec![
-                Span::styled("  ◎ ", Style::default().fg(ACCENT).bg(Color::Reset)),
                 Span::styled(
-                    trunc_cells(&al.title, w.saturating_sub(10)),
+                    format!("{} ", ctx.icons.album),
+                    Style::default().fg(ACCENT).bg(Color::Reset),
+                ),
+                Span::styled(
+                    trunc_cells(&al.title, title_budget),
                     Style::default().fg(TEXT).bg(Color::Reset),
                 ),
-                Span::styled(
-                    format!(" ({})", al.year.as_deref().unwrap_or(&al.kind)),
-                    Style::default().fg(DIM).bg(Color::Reset),
-                ),
+                Span::styled(suffix, Style::default().fg(DIM).bg(Color::Reset)),
             ]));
         }
+
         if !art.related.is_empty() {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
-                "Fans Also Like",
+                trunc_cells("Fans Also Like", w),
                 Style::default()
                     .fg(ACCENT)
                     .bg(Color::Reset)
                     .add_modifier(Modifier::BOLD),
             )));
             for rel in art.related.iter().take(4) {
-                lines.push(Line::from(Span::styled(
-                    format!("  ◉ {}", trunc_cells(&rel.name, w.saturating_sub(4))),
-                    Style::default().fg(DIM).bg(Color::Reset),
-                )));
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("{} ", ctx.icons.artist),
+                        Style::default().fg(DIM).bg(Color::Reset),
+                    ),
+                    Span::styled(
+                        trunc_cells(&rel.name, w.saturating_sub(2)),
+                        Style::default().fg(TEXT).bg(Color::Reset),
+                    ),
+                ]));
             }
         }
-        frame.render_widget(Paragraph::new(lines), area);
+
+        if y < max_y && !lines.is_empty() {
+            frame.render_widget(
+                Paragraph::new(lines),
+                Rect {
+                    x: area.x,
+                    y,
+                    width: area.width,
+                    height: max_y - y,
+                },
+            );
+        }
     }
 }

@@ -71,14 +71,11 @@ impl Widget for NowPlayingBar<'_> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        if inner.width < 8 || inner.height == 0 {
+        if inner.width < 6 || inner.height == 0 {
             return;
         }
-        let content_x = inner.x + 1;
-        let content_w = inner.width.saturating_sub(2) as usize;
-        if content_w < 6 {
-            return;
-        }
+        let content_x = inner.x;
+        let content_w = inner.width as usize;
 
         // Row 1: Track Title · Artist · Album (or error / idle prompt)
         let row1_line = if let Some(ref err) = self.snapshot.error {

@@ -477,12 +477,14 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
         wide.draw(|f| app.render(f)).unwrap();
     }
 
-    // Expanded Lyrics + Help modal at narrow 72x20
+    // Expanded Lyrics + Help modal at narrow 72x20, then toggle Lyrics back off
     app.dispatch_action(Action::ToggleLyrics);
     narrow.draw(|f| app.render(f)).unwrap();
     app.dispatch_action(Action::ToggleHelp);
     narrow.draw(|f| app.render(f)).unwrap();
     app.dispatch_action(Action::InputCancel);
+    app.dispatch_action(Action::ToggleLyrics);
+    assert_eq!(app.home.mode, HomePanelMode::Discover);
 
     // 4. Push ArtistView (7 sub-tabs + split overview >= 106 + cover size cycle), AlbumView, PlaylistDetailView
     let mut art_view = ArtistView::new("UCdp1".into(), "Daft Punk".into(), CoverSize::M, false);
@@ -718,7 +720,7 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
     app.dispatch_action(Action::Escape);
     assert!(app.nav_stack.is_empty());
 
-    // 8. Regression: ArtistView never prints duplicate "subscribers subscribers"
+    // 8. Regression: ArtistView never prints duplicate "subscribers subscribers", wraps bio, and shows full Similar audience
     let mut art_sub = ArtistView::new("UCsub".into(), "Daft Punk".into(), CoverSize::M, false);
     art_sub.set_artist(Artist {
         summary: ArtistSummary {
@@ -727,13 +729,21 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
             subtitle: Some("65M monthly audience".into()),
             thumbs: Vec::new(),
         },
-        description: None,
+        description: Some(
+            "French electronic duo formed in Paris who pioneered house music across four studio albums and iconic live performances worldwide."
+                .into(),
+        ),
         listeners: Some("65M monthly audience".into()),
         songs: vec![sample_track("s1", "One More Time")],
         albums: Vec::new(),
         singles: Vec::new(),
         playlists: Vec::new(),
-        related: Vec::new(),
+        related: vec![ArtistSummary {
+            browse_id: "UCrel1".into(),
+            name: "LIBERTO".into(),
+            subtitle: Some("1.05M monthly audience".into()),
+            thumbs: Vec::new(),
+        }],
         albums_params: None,
         singles_params: None,
         radio_id: None,
@@ -749,8 +759,18 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
     app.nav_stack.push(NavPage::Artist(Box::new(art_sub)));
     wide.draw(|f| app.render(f)).unwrap();
     let art_buf = buf_str(&wide);
+    assert!(art_buf.contains("Profile"));
     assert!(art_buf.contains("7.23M subscribers"));
     assert!(!art_buf.contains("subscribers subscribers"));
+    assert!(art_buf.contains("iconic live performances"));
+
+    // Switch ArtistView to Similar tab and verify full "1.05M monthly audience" renders without truncation
+    if let Some(NavPage::Artist(v)) = app.nav_stack.last_mut() {
+        v.active_tab = ArtistTab::Similar;
+    }
+    wide.draw(|f| app.render(f)).unwrap();
+    let sim_buf = buf_str(&wide);
+    assert!(sim_buf.contains("1.05M monthly audience"));
     app.nav_stack.clear();
 
     // 9. Regression: Closing OAuthWizard ignores late BgMsg::OAuthPollCompleted!
@@ -770,7 +790,8 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
     )));
     assert_eq!(app.settings.privacy.auth_mode, AuthMode::Anonymous);
 
-    // 10. Regression: TrackTable renders thin scrollbar when rows exceed viewport height
+    // 10. Regression: TrackTable renders sleek `▎` scrollbar & Discover border stays neutral BORDER (not ACCENT),
+    // while multi-pane Playlists uses ACCENT on its active pane!
     let many_tracks: Vec<Track> = (0..30)
         .map(|i| sample_track(&format!("v{i}"), &format!("Long Track Title #{i}")))
         .collect();
@@ -781,7 +802,45 @@ async fn full_app_navigation_detail_views_settings_privacy_lock_and_narrow_72x20
     app.dispatch_action(Action::SwitchTab(0));
     wide.draw(|f| app.render(f)).unwrap();
     let sb_buf = buf_str(&wide);
-    assert!(sb_buf.contains('┃') || sb_buf.contains('│'));
+    assert!(sb_buf.contains(musick_tui::widgets::SCROLL_THUMB_GLYPH));
+    // Verify Discover top border uses neutral BORDER (not ACCENT) on single-active-panel Home
+    {
+        let b = wide.backend().buffer();
+        let mut found_discover_corner = false;
+        for x in 10..b.area.width.saturating_sub(5) {
+            if b[(x, 3)].symbol() == "┌" {
+                assert_eq!(b[(x, 3)].fg, musick_tui::theme::BORDER);
+                found_discover_corner = true;
+            }
+        }
+        assert!(found_discover_corner);
+    }
+
+    // Verify SearchResults renders via MediaList (2-row items with sleek scrollbar when overflowing)
+    let search_items: Vec<SearchItem> = (0..12)
+        .map(|i| SearchItem::Track(sample_track(&format!("sr{i}"), &format!("Search Hit #{i}"))))
+        .collect();
+    app.home.mode = HomePanelMode::SearchResults;
+    app.home.set_search_results(search_items);
+    app.dispatch_action(Action::SwitchTab(0));
+    wide.draw(|f| app.render(f)).unwrap();
+    let sr_buf = buf_str(&wide);
+    assert!(sr_buf.contains("Search Hit #0"));
+    assert!(sr_buf.contains(musick_tui::widgets::SCROLL_THUMB_GLYPH));
+
+    // Multi-pane 2 Playlists MUST highlight its active pane border with ACCENT and inactive with BORDER
+    app.dispatch_action(Action::SwitchTab(1));
+    wide.draw(|f| app.render(f)).unwrap();
+    {
+        let b = wide.backend().buffer();
+        let corners: Vec<_> = (1..b.area.width.saturating_sub(1))
+            .filter(|&x| b[(x, 3)].symbol() == "┌")
+            .map(|x| b[(x, 3)].fg)
+            .collect();
+        assert_eq!(corners.len(), 2);
+        assert_eq!(corners[0], musick_tui::theme::ACCENT);
+        assert_eq!(corners[1], musick_tui::theme::BORDER);
+    }
 
     engine_handle.send(AppCommand::Shutdown).await;
     let _ = engine_join.await;

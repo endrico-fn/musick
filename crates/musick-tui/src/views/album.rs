@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use musick_core::{Album, AppCommand, SavedCollectionKind};
 
 use crate::keymap::Action;
-use crate::text::{Align, trunc_cells};
+use crate::text::{Align, trunc_cells, wrap_cells};
 use crate::theme::{ACCENT, DIM, TEXT, panel_block};
 use crate::views::{RenderCtx, ViewEffect};
 use crate::widgets::{ColumnDef, CoverRenderer, TableRow, TrackTable};
@@ -222,7 +222,7 @@ impl AlbumView {
         } else {
             "w save · p play"
         };
-        let info_block = panel_block(&self.title_hint, Some(sub), false);
+        let info_block = panel_block("Details", Some(sub), false);
         let info_inner = info_block.inner(hero_cols[2]);
         frame.render_widget(info_block, hero_cols[2]);
 
@@ -232,7 +232,8 @@ impl AlbumView {
                 info_inner,
             );
         } else if let Some(ref alb) = self.album {
-            let w = usize::from(info_inner.width.saturating_sub(2));
+            let w = usize::from(info_inner.width);
+            let max_lines = usize::from(info_inner.height);
             let artists = alb
                 .summary
                 .artists
@@ -240,33 +241,45 @@ impl AlbumView {
                 .map(|a| a.name.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
+            let mut meta = format!("{} · {} tracks", alb.summary.subtitle(), alb.tracks.len());
+            if let Some(ref dur) = alb.duration_text
+                && !dur.is_empty()
+            {
+                meta.push_str(&format!(" · {dur}"));
+            }
             let mut lines = vec![
                 Line::from(Span::styled(
-                    format!(" {}", trunc_cells(&alb.summary.title, w)),
+                    trunc_cells(&alb.summary.title, w),
                     Style::default()
                         .fg(TEXT)
                         .bg(Color::Reset)
                         .add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
-                    format!(" {}", trunc_cells(&artists, w)),
+                    trunc_cells(&artists, w),
                     Style::default().fg(ACCENT).bg(Color::Reset),
                 )),
                 Line::from(Span::styled(
-                    format!(" {} · {} tracks", alb.summary.subtitle(), alb.tracks.len()),
+                    trunc_cells(&meta, w),
                     Style::default().fg(DIM).bg(Color::Reset),
                 )),
             ];
-            if let Some(ref dur) = alb.duration_text {
-                lines.push(Line::from(Span::styled(
-                    format!(" {}", trunc_cells(dur, w)),
-                    Style::default().fg(DIM).bg(Color::Reset),
-                )));
+            if let Some(ref desc) = alb.description {
+                let prose: String = desc.split_whitespace().collect::<Vec<_>>().join(" ");
+                let rem = max_lines.saturating_sub(lines.len());
+                if !prose.is_empty() && rem > 0 {
+                    for ln in wrap_cells(&prose, w).into_iter().take(rem) {
+                        lines.push(Line::from(Span::styled(
+                            ln,
+                            Style::default().fg(DIM).bg(Color::Reset),
+                        )));
+                    }
+                }
             }
             frame.render_widget(Paragraph::new(lines), info_inner);
         }
 
-        let tr_block = panel_block("Tracks", Some("Bksp back"), true);
+        let tr_block = panel_block("Tracks", Some("Bksp back"), false);
         let tr_inner = tr_block.inner(parts[1]);
         frame.render_widget(tr_block, parts[1]);
 

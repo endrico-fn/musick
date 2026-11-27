@@ -59,7 +59,7 @@ impl Widget for LyricsBox<'_> {
 
         if !self.has_track {
             Line::from(Span::styled(
-                "  Play a song for synced lyrics",
+                "Play a song for synced lyrics",
                 Style::default().fg(DIM).bg(Color::Reset),
             ))
             .render(
@@ -77,9 +77,9 @@ impl Widget for LyricsBox<'_> {
         if self.translating && self.lyrics.is_empty() {
             self.spinner.loading_line("Translating lyrics…").render(
                 Rect {
-                    x: area.x + 1,
+                    x: area.x,
                     y: area.y,
-                    width: area.width.saturating_sub(1),
+                    width: area.width,
                     height: 1,
                 },
                 buf,
@@ -89,7 +89,7 @@ impl Widget for LyricsBox<'_> {
 
         if self.lyrics.is_empty() {
             Line::from(Span::styled(
-                "  No lyrics available",
+                "No lyrics available",
                 Style::default().fg(DIM).bg(Color::Reset),
             ))
             .render(

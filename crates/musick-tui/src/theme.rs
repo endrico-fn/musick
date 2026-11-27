@@ -1,6 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, BorderType, Borders};
+use ratatui::widgets::{Block, BorderType, Borders, Padding};
 
 use musick_core::{IconMode, SearchItem};
 
@@ -8,6 +8,7 @@ pub const ACCENT: Color = Color::Rgb(0x26, 0xd9, 0xb4);
 pub const ACCENT_BRIGHT: Color = Color::Rgb(0x4e, 0xf0, 0xce);
 pub const BORDER: Color = Color::Rgb(0xa6, 0xa6, 0xa6);
 pub const BORDER_DIM: Color = Color::Rgb(0x7c, 0x7c, 0x7c);
+pub const SCROLL_TRACK: Color = Color::Rgb(0x3a, 0x3a, 0x3a);
 pub const TEXT: Color = Color::Rgb(0xf2, 0xf2, 0xf2);
 pub const DIM: Color = Color::Rgb(0x7c, 0x7c, 0x7c);
 pub const TR_ACTIVE: Color = Color::Rgb(0x9e, 0xf5, 0xe2);
@@ -160,6 +161,7 @@ pub fn panel_block<'a>(title: &'a str, subtitle: Option<&'a str>, focused: bool)
     let mut block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
+        .padding(Padding::horizontal(1))
         .border_style(Style::default().fg(border_color).bg(Color::Reset))
         .style(Style::default().bg(Color::Reset))
         .title(

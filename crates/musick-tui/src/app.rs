@@ -193,6 +193,18 @@ impl App {
 
     pub fn kick_startup_loads(&mut self) {
         self.trigger_home_refresh();
+        if self.settings.privacy.save_history
+            && self.snapshot.track.is_none()
+            && let Ok(mut recent) = self.services.store.recent_plays(1)
+            && let Some(last) = recent.pop()
+        {
+            if let Some(url) = last.cover_url() {
+                self.request_cover_image(url);
+            }
+            self.services
+                .engine
+                .try_send(AppCommand::RestoreTrack { track: last });
+        }
         if self.services.auth.is_authenticated() && self.settings.sync.sync_on_startup {
             self.trigger_sync_now();
         }
@@ -338,7 +350,15 @@ impl App {
                 self.set_toast(format!("Home load error: {err}"));
             }
             BgMsg::SearchLoaded(Ok(items)) => {
+                let cover_urls: Vec<String> = items
+                    .iter()
+                    .take(30)
+                    .filter_map(SearchItem::cover_url)
+                    .collect();
                 self.home.set_search_results(items);
+                for url in cover_urls {
+                    self.request_cover_image(url);
+                }
                 self.refresh_cache_stats();
             }
             BgMsg::SearchLoaded(Err(err)) => {
@@ -359,8 +379,28 @@ impl App {
                             if let Some(url) = art.summary.cover_url() {
                                 cover_urls.push(url);
                             }
-                            for al in art.albums.iter().chain(art.singles.iter()).take(48) {
+                            for tr in art.songs.iter().take(24) {
+                                if let Some(u) = tr.cover_url() {
+                                    cover_urls.push(u);
+                                }
+                            }
+                            for tr in art.videos.iter().take(12) {
+                                if let Some(u) = tr.cover_url() {
+                                    cover_urls.push(u);
+                                }
+                            }
+                            for al in art.albums.iter().chain(art.singles.iter()).take(32) {
                                 if let Some(u) = al.cover_url() {
+                                    cover_urls.push(u);
+                                }
+                            }
+                            for rel in art.related.iter().take(16) {
+                                if let Some(u) = rel.cover_url() {
+                                    cover_urls.push(u);
+                                }
+                            }
+                            for pl in art.playlists.iter().take(12) {
+                                if let Some(u) = pl.cover_url() {
                                     cover_urls.push(u);
                                 }
                             }
@@ -1538,9 +1578,17 @@ impl App {
     }
 
     fn re_request_active_covers(&mut self) {
+        if !self.covers.is_enabled() {
+            return;
+        }
         let mut urls = Vec::new();
         if let Some(url) = self.snapshot.track.as_ref().and_then(Track::cover_url) {
             urls.push(url);
+        }
+        for item in self.home.search_results.iter().take(30) {
+            if let Some(u) = item.cover_url() {
+                urls.push(u);
+            }
         }
         if let Some(top) = self.nav_stack.last() {
             match top {
@@ -1549,8 +1597,23 @@ impl App {
                         if let Some(u) = art.summary.cover_url() {
                             urls.push(u);
                         }
-                        for al in art.albums.iter().chain(art.singles.iter()).take(48) {
+                        for tr in art.songs.iter().take(24) {
+                            if let Some(u) = tr.cover_url() {
+                                urls.push(u);
+                            }
+                        }
+                        for tr in art.videos.iter().take(12) {
+                            if let Some(u) = tr.cover_url() {
+                                urls.push(u);
+                            }
+                        }
+                        for al in art.albums.iter().chain(art.singles.iter()).take(32) {
                             if let Some(u) = al.cover_url() {
+                                urls.push(u);
+                            }
+                        }
+                        for rel in art.related.iter().take(16) {
+                            if let Some(u) = rel.cover_url() {
                                 urls.push(u);
                             }
                         }
@@ -1586,7 +1649,10 @@ impl App {
     }
 
     fn request_cover_image(&mut self, url: String) {
-        if self.covers.has_image(&url) || !self.requested_images.insert(url.clone()) {
+        if !self.covers.is_enabled()
+            || self.covers.has_image(&url)
+            || !self.requested_images.insert(url.clone())
+        {
             return;
         }
         self.last_cover_url = Some(url.clone());
@@ -1740,6 +1806,7 @@ impl App {
     }
 
     pub fn render(&mut self, frame: &mut Frame<'_>) {
+        self.covers.begin_frame();
         let full = frame.area();
         if full.width < 24 || full.height < 10 {
             return;

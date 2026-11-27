@@ -492,7 +492,7 @@ impl LibraryView {
             return;
         }
         let sub = format!("{} items", self.current_len());
-        let block = panel_block("Library", Some(&sub), true);
+        let block = panel_block("Library", Some(&sub), false);
         let inner = block.inner(area);
         frame.render_widget(block, area);
         self.last_width = inner.width;

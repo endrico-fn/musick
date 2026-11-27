@@ -75,6 +75,8 @@ pub enum ImageProtocol {
     Sixel,
     #[serde(alias = "halfcell")]
     Halfblock,
+    #[serde(alias = "none")]
+    Off,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -142,7 +142,7 @@ pub fn render_modal(
 
             if playlists.is_empty() {
                 lines.push(Line::from(Span::styled(
-                    "  No playlists yet — switch to 2 Playlists and press c to create one.",
+                    "No playlists yet — switch to 2 Playlists and press c to create one.",
                     Style::default().fg(DIM).bg(Color::Reset),
                 )));
             } else {
@@ -153,7 +153,7 @@ pub fn render_modal(
                 } else {
                     0
                 };
-                let row_w = usize::from(inner.width.saturating_sub(2));
+                let row_w = usize::from(inner.width);
                 for (i, pl) in playlists
                     .iter()
                     .enumerate()
@@ -390,7 +390,7 @@ pub fn render_modal(
                 .map(|&(k, desc)| {
                     Line::from(vec![
                         Span::styled(
-                            format!("  {k:<18} "),
+                            format!("{k:<18} "),
                             Style::default()
                                 .fg(ACCENT)
                                 .bg(Color::Reset)

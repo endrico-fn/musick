@@ -70,11 +70,14 @@ mod widget_render_tests {
     use ratatui::layout::Rect;
 
     use musick_core::{
-        AuthMode, CavaPalette, LyricLine, Lyrics, PlaybackSnapshot, PositionTick, Track,
+        AuthMode, CavaPalette, ImageProtocol, LyricLine, Lyrics, PlaybackSnapshot, PositionTick,
+        Track,
     };
-    use musick_tui::theme::{UNICODE_ICONS, WARN_GOLD};
+    use musick_tui::theme::{ACCENT, BORDER, UNICODE_ICONS, WARN_GOLD, panel_block};
     use musick_tui::widgets::{
-        BrailleSpinner, CavaWidget, CoverRenderer, LyricsBox, NowPlayingBar, TopBar,
+        BrailleSpinner, CavaWidget, ColumnDef, CoverRenderer, LyricsBox, MediaListItem,
+        NowPlayingBar, SCROLL_THUMB_GLYPH, SCROLL_TRACK_GLYPH, TableRow, TopBar, TrackTable,
+        render_media_list,
     };
 
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
@@ -276,8 +279,11 @@ mod widget_render_tests {
                 "font ({fw}x{fh}): outer {panel_w}x{panel_h} has ratio {outer_ratio:.3}"
             );
 
-            // Inner cover rect fills 100% of inner height (zero vertical dead space below cover)
-            let inner = Rect::new(1, 1, panel_w - 2, panel_h - 2);
+            // Inner cover rect (accounting for border + 1-cell horizontal panel padding) fills 100% of inner height
+            let block = panel_block("Now Playing", None, false);
+            let inner = block.inner(Rect::new(0, 0, panel_w, panel_h));
+            assert_eq!(inner.width, panel_w - 4);
+            assert_eq!(inner.height, panel_h - 2);
             let sq = covers.square_rect(inner);
             assert_eq!(sq.height, inner.height);
             assert!(sq.width <= inner.width);
@@ -289,6 +295,103 @@ mod widget_render_tests {
                 sq.width,
                 sq.height
             );
+        }
+    }
+
+    #[test]
+    fn panel_block_padding_sleek_scrollbar_gap_and_media_list_fallback() {
+        let mut term = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        let rows: Vec<TableRow> = (0..15)
+            .map(|i| TableRow::new(vec![format!("Song {i}"), "Artist".into(), "3:20".into()]))
+            .collect();
+        let cols = [
+            ColumnDef {
+                title: "Title",
+                fixed_width: None,
+                align: musick_tui::text::Align::Left,
+            },
+            ColumnDef {
+                title: "Artist",
+                fixed_width: Some(12),
+                align: musick_tui::text::Align::Left,
+            },
+            ColumnDef {
+                title: "Time",
+                fixed_width: Some(5),
+                align: musick_tui::text::Align::Right,
+            },
+        ];
+
+        term.draw(|f| {
+            let blk = panel_block("Discover", None, false);
+            let inner = blk.inner(Rect::new(0, 0, 60, 10));
+            f.render_widget(blk, Rect::new(0, 0, 60, 10));
+            f.render_widget(
+                TrackTable {
+                    columns: &cols,
+                    rows: &rows,
+                    cursor: 0,
+                    focused: true,
+                    show_header: false,
+                    loading: false,
+                    loading_label: "",
+                    empty_text: "",
+                    icons: UNICODE_ICONS,
+                    spinner: BrailleSpinner::new(false),
+                },
+                inner,
+            );
+        })
+        .unwrap();
+
+        let buf = term.backend().buffer();
+        // Neutral border on focused=false
+        assert_eq!(buf[(0, 0)].fg, BORDER);
+        assert_ne!(buf[(0, 0)].fg, ACCENT);
+        // 1-space padding inside left border (x=1 is blank) and right border (x=58 is blank)
+        assert_eq!(buf[(1, 1)].symbol(), " ");
+        assert_eq!(buf[(58, 1)].symbol(), " ");
+        // Scrollbar at x=57 with 1-space gap at x=56 separating content from scrollbar
+        assert_eq!(buf[(57, 1)].symbol(), SCROLL_THUMB_GLYPH);
+        assert_eq!(buf[(56, 1)].symbol(), " ");
+        let has_track = (1..9).any(|y| buf[(57, y)].symbol() == SCROLL_TRACK_GLYPH);
+        assert!(has_track);
+
+        // MediaList renders cleanly both with covers enabled and with ImageProtocol::Off fallback
+        let items = vec![MediaListItem {
+            title: "1. BABYDOLL".into(),
+            subtitle: "Ari Abdul · BABYDOLL".into(),
+            meta_top: "257M".into(),
+            meta_bottom: "3:17".into(),
+            cover_url: None,
+            glyph: UNICODE_ICONS.song,
+            is_playing: true,
+            is_dim: false,
+        }];
+        let mut covers = CoverRenderer::halfblocks_for_test();
+        for pref in [ImageProtocol::Halfblock, ImageProtocol::Off] {
+            covers.set_protocol(pref);
+            let mut t2 = Terminal::new(TestBackend::new(50, 6)).unwrap();
+            t2.draw(|f| {
+                render_media_list(
+                    f,
+                    Rect::new(0, 0, 50, 6),
+                    &items,
+                    0,
+                    true,
+                    false,
+                    "",
+                    "",
+                    UNICODE_ICONS,
+                    BrailleSpinner::new(false),
+                    &mut covers,
+                );
+            })
+            .unwrap();
+            let rendered = buffer_text(&t2);
+            assert!(rendered.contains("1. BABYDOLL"));
+            assert!(rendered.contains("257M"));
+            assert!(rendered.contains("3:17"));
         }
     }
 }

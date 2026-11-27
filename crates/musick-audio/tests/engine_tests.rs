@@ -606,6 +606,179 @@ async fn fast_path_loading_failed_retries_via_fallback_and_final_error_clears_bu
     let _ = tokio::time::timeout(Duration::from_secs(2), join).await;
 }
 
+struct SlowTaggedStreamBackend {
+    delay_ms: u64,
+}
+
+#[async_trait]
+impl StreamBackend for SlowTaggedStreamBackend {
+    async fn resolve(&self, video_id: &str, _quality: AudioQuality) -> AudioResult<RawStream> {
+        tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
+        Ok(RawStream {
+            url: format!("https://stream.invalid/{video_id}?expire=9999999999"),
+            codec: "opus".into(),
+            bitrate: 128,
+            sample_rate: 48_000,
+            user_agent: Some("SlowUA".into()),
+        })
+    }
+}
+
+#[tokio::test]
+async fn non_blocking_skip_cancels_stale_resolve_and_gapless_resets_position_and_respects_repeat_one()
+ {
+    let dir = tempdir().unwrap();
+    let paths = AppPaths::from_roots(
+        dir.path().join("cfg"),
+        dir.path().join("data"),
+        dir.path().join("cache"),
+        dir.path().join("rt"),
+    );
+    let store = Arc::new(UserStore::open(&paths).unwrap());
+    let cache = Arc::new(CacheManager::open(&paths, CacheSettings::default()).unwrap());
+    let auth = Arc::new(AuthManager::new_anonymous(
+        Arc::new(MemorySecretStore::new()),
+        musick_core::build_http_client(),
+    ));
+    let catalog = Arc::new(MockEngineCatalog::default());
+    let backend = Arc::new(MockAudioBackend::new());
+    let resolver = Arc::new(HybridStreamResolver::with_backends(
+        None,
+        Arc::new(SlowTaggedStreamBackend { delay_ms: 80 }),
+        AudioQuality::Best,
+        Arc::new(|| 1000.0),
+    ));
+
+    let mut settings = Settings::default();
+    settings.lyrics.enabled = false;
+    let lyrics = Arc::new(
+        LyricsService::new(
+            Some(catalog.clone()),
+            cache,
+            musick_core::build_http_client(),
+            settings.clone(),
+        )
+        .with_ytdlp_captions(false),
+    );
+
+    let (handle, join) = PlayerEngine::spawn(PlayerEngineDeps {
+        backend: backend.clone(),
+        resolver,
+        catalog,
+        lyrics,
+        store,
+        auth,
+        settings,
+    });
+
+    // 1. RestoreTrack sets restored=true without calling backend.load_url; TogglePause loads it
+    let mut restored_track = Track::minimal("r0", "Restored Song");
+    restored_track.duration = Some(195);
+    handle
+        .send(AppCommand::RestoreTrack {
+            track: restored_track,
+        })
+        .await;
+    for _ in 0..20 {
+        if handle.snapshot().restored {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(handle.snapshot().restored);
+    assert!(!handle.snapshot().playing);
+    assert!(backend.loaded_urls.lock().unwrap().is_empty());
+
+    // 2. Rapid PlayTracks + Next skips while resolving cancels stale track t1 immediately!
+    handle
+        .send(AppCommand::PlayTracks {
+            tracks: vec![
+                Track::minimal("t1", "Track One"),
+                Track::minimal("t2", "Track Two"),
+                Track::minimal("t3", "Track Three"),
+            ],
+            start_index: 0,
+            autoplay: false,
+        })
+        .await;
+    // Immediately skip to t2 and t3 before the 80ms resolve completes
+    handle.send(AppCommand::Next).await;
+    handle.send(AppCommand::Next).await;
+
+    for _ in 0..40 {
+        if backend
+            .loaded_urls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|u| u.contains("/t3?"))
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let loaded = backend.loaded_urls.lock().unwrap().clone();
+    assert_eq!(loaded.len(), 1);
+    assert!(loaded[0].contains("/t3?"));
+
+    // 3. Gapless transition resets position_secs to 0.0 and active_lyric_idx to None
+    backend.loaded_urls.lock().unwrap().clear();
+    backend.gapless_urls.lock().unwrap().clear();
+    handle
+        .send(AppCommand::PlayTracks {
+            tracks: vec![
+                Track::minimal("g1", "Gapless 1"),
+                Track::minimal("g2", "Gapless 2"),
+            ],
+            start_index: 0,
+            autoplay: false,
+        })
+        .await;
+    for _ in 0..40 {
+        if !backend.gapless_urls.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(backend.gapless_urls.lock().unwrap()[0].contains("/g2?"));
+
+    backend.emit(BackendEvent::Properties(AudioProperties {
+        position: 142.0,
+        duration: 180.0,
+        paused: false,
+        volume: 80,
+        buffering: false,
+        core_idle: false,
+    }));
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!((handle.position().position_secs - 142.0).abs() < 0.1);
+
+    backend.emit(BackendEvent::Eof);
+    for _ in 0..30 {
+        if handle
+            .snapshot()
+            .track
+            .as_ref()
+            .is_some_and(|t| t.video_id == "g2")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(handle.position().position_secs, 0.0);
+    assert!(handle.position().active_lyric_idx.is_none());
+
+    // 4. RepeatMode::One never appends duplicate gapless URL
+    backend.gapless_urls.lock().unwrap().clear();
+    handle.send(AppCommand::CycleRepeat).await; // Off -> All
+    handle.send(AppCommand::CycleRepeat).await; // All -> One
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    assert!(backend.gapless_urls.lock().unwrap().is_empty());
+
+    handle.send(AppCommand::Shutdown).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), join).await;
+}
+
 #[test]
 fn cava_config_and_frame_parsing_work_cleanly() {
     let cfg = build_cava_config(

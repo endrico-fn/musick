@@ -299,10 +299,13 @@ impl SettingsView {
                     (ImageProtocol::Kitty, true) | (ImageProtocol::Halfblock, false) => {
                         ImageProtocol::Sixel
                     }
-                    (ImageProtocol::Sixel, true) | (ImageProtocol::Auto, false) => {
+                    (ImageProtocol::Sixel, true) | (ImageProtocol::Off, false) => {
                         ImageProtocol::Halfblock
                     }
-                    (ImageProtocol::Halfblock, true) | (ImageProtocol::Kitty, false) => {
+                    (ImageProtocol::Halfblock, true) | (ImageProtocol::Auto, false) => {
+                        ImageProtocol::Off
+                    }
+                    (ImageProtocol::Off, true) | (ImageProtocol::Kitty, false) => {
                         ImageProtocol::Auto
                     }
                 };
@@ -425,7 +428,7 @@ impl SettingsView {
             ctx.auth_mode.as_str(),
             format_bytes(ctx.cache_stats.total_bytes)
         );
-        let block = panel_block("Settings", Some(&cache_summary), true);
+        let block = panel_block("Settings", Some(&cache_summary), false);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -556,7 +559,10 @@ impl SettingsView {
                     SettingRow::ImageProtocol => (
                         "Display",
                         "Cover Image Protocol",
-                        format!("{:?}", s.display.image_protocol),
+                        match s.display.image_protocol {
+                            ImageProtocol::Off => "Off (No Images)".to_string(),
+                            other => format!("{other:?}"),
+                        },
                         false,
                     ),
                     SettingRow::ReducedMotion => (

@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use musick_core::{AppCommand, Playlist, SavedCollectionKind, Track};
 
 use crate::keymap::Action;
-use crate::text::{Align, trunc_cells};
+use crate::text::{Align, trunc_cells, wrap_cells};
 use crate::theme::{ACCENT, CURSOR_BG, DIM, TEXT, panel_block};
 use crate::views::{RenderCtx, TrackSortMode, ViewEffect};
 use crate::widgets::{ColumnDef, CoverRenderer, TableRow, TrackTable};
@@ -260,7 +260,7 @@ impl PlaylistDetailView {
         } else {
             "w save · p play"
         };
-        let info_block = panel_block(&self.title_hint, Some(sub), false);
+        let info_block = panel_block("Details", Some(sub), false);
         let info_inner = info_block.inner(hero_cols[2]);
         frame.render_widget(info_block, hero_cols[2]);
 
@@ -270,9 +270,10 @@ impl PlaylistDetailView {
                 info_inner,
             );
         } else if let Some(ref pl) = self.playlist {
-            let w = usize::from(info_inner.width.saturating_sub(2));
+            let w = usize::from(info_inner.width);
+            let max_lines = usize::from(info_inner.height);
             let mut lines = vec![Line::from(Span::styled(
-                format!(" {}", trunc_cells(&pl.summary.title, w)),
+                trunc_cells(&pl.summary.title, w),
                 Style::default()
                     .fg(TEXT)
                     .bg(Color::Reset)
@@ -280,26 +281,41 @@ impl PlaylistDetailView {
             ))];
             if let Some(ref auth) = pl.summary.author {
                 lines.push(Line::from(Span::styled(
-                    format!(" {}", trunc_cells(auth, w)),
+                    trunc_cells(auth, w),
                     Style::default().fg(ACCENT).bg(Color::Reset),
                 )));
             }
             lines.push(Line::from(Span::styled(
-                format!(
-                    " {} tracks{}",
-                    pl.tracks.len(),
-                    pl.duration_text
-                        .as_deref()
-                        .map(|d| format!(" · {d}"))
-                        .unwrap_or_default()
+                trunc_cells(
+                    &format!(
+                        "{} tracks{}",
+                        pl.tracks.len(),
+                        pl.duration_text
+                            .as_deref()
+                            .map(|d| format!(" · {d}"))
+                            .unwrap_or_default()
+                    ),
+                    w,
                 ),
                 Style::default().fg(DIM).bg(Color::Reset),
             )));
+            if let Some(ref desc) = pl.description {
+                let prose: String = desc.split_whitespace().collect::<Vec<_>>().join(" ");
+                let rem = max_lines.saturating_sub(lines.len());
+                if !prose.is_empty() && rem > 0 {
+                    for ln in wrap_cells(&prose, w).into_iter().take(rem) {
+                        lines.push(Line::from(Span::styled(
+                            ln,
+                            Style::default().fg(DIM).bg(Color::Reset),
+                        )));
+                    }
+                }
+            }
             frame.render_widget(Paragraph::new(lines), info_inner);
         }
 
         let tr_sub = format!("{} · / filter · o sort · Bksp back", self.sort_mode.label());
-        let tr_block = panel_block("Tracks", Some(&tr_sub), true);
+        let tr_block = panel_block("Tracks", Some(&tr_sub), false);
         let tr_inner = tr_block.inner(parts[1]);
         frame.render_widget(tr_block, parts[1]);
 

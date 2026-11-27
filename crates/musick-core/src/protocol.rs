@@ -86,6 +86,9 @@ pub enum AppCommand {
         playlist_id: Option<String>,
         seed_track: Option<Track>,
     },
+    RestoreTrack {
+        track: Track,
+    },
     TogglePause,
     Next,
     Previous,

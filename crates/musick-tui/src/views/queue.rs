@@ -157,7 +157,7 @@ impl QueueView {
         } else {
             ctx.queue.summary.as_str()
         };
-        let block = panel_block("Queue", Some(sub), true);
+        let block = panel_block("Queue", Some(sub), false);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 

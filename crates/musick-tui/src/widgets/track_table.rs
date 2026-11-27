@@ -6,7 +6,7 @@ use ratatui::widgets::Widget;
 
 use crate::text::{Align, align_cells};
 use crate::theme::{ACCENT, BORDER_DIM, CURSOR_BG, CURSOR_BLUR_BG, DIM, IconSet, TEXT};
-use crate::widgets::BrailleSpinner;
+use crate::widgets::{BrailleSpinner, render_scrollbar};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ColumnDef<'a> {
@@ -123,9 +123,9 @@ impl Widget for TrackTable<'_> {
             let line = self.spinner.loading_line(self.loading_label);
             line.render(
                 Rect {
-                    x: area.x + 1,
+                    x: area.x,
                     y: area.y,
-                    width: area.width.saturating_sub(1),
+                    width: area.width,
                     height: 1,
                 },
                 buf,
@@ -140,9 +140,9 @@ impl Widget for TrackTable<'_> {
             ))
             .render(
                 Rect {
-                    x: area.x + 1,
+                    x: area.x,
                     y: area.y,
-                    width: area.width.saturating_sub(1),
+                    width: area.width,
                     height: 1,
                 },
                 buf,
@@ -157,9 +157,9 @@ impl Widget for TrackTable<'_> {
         };
         let visible_rows_est = usize::from(area.height.saturating_sub(header_rows));
         let show_scrollbar =
-            visible_rows_est > 0 && self.rows.len() > visible_rows_est && area.width >= 10;
+            visible_rows_est > 0 && self.rows.len() > visible_rows_est && area.width >= 12;
         let content_width = if show_scrollbar {
-            area.width.saturating_sub(1)
+            area.width.saturating_sub(2)
         } else {
             area.width
         };
@@ -297,20 +297,15 @@ impl Widget for TrackTable<'_> {
         }
 
         if show_scrollbar {
-            let sb_x = area.x + area.width - 1;
-            let total = self.rows.len();
-            let thumb_h = ((visible_rows * visible_rows) / total).clamp(1, visible_rows);
-            let max_scroll = total.saturating_sub(visible_rows).max(1);
-            let thumb_top = (scroll_start * (visible_rows.saturating_sub(thumb_h))) / max_scroll;
-            let thumb_fg = if self.focused { ACCENT } else { DIM };
-            for r in 0..visible_rows {
-                if let Some(cell) = buf.cell_mut((sb_x, y + r as u16)) {
-                    let is_thumb = r >= thumb_top && r < thumb_top + thumb_h;
-                    cell.set_symbol(if is_thumb { "┃" } else { "│" });
-                    cell.set_fg(if is_thumb { thumb_fg } else { BORDER_DIM });
-                    cell.set_bg(Color::Reset);
-                }
-            }
+            render_scrollbar(
+                buf,
+                area.x + area.width - 1,
+                y,
+                visible_rows,
+                self.rows.len(),
+                scroll_start,
+                self.focused,
+            );
         }
     }
 }

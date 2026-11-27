@@ -8,7 +8,7 @@ use musick_core::CoverSize;
 
 use crate::text::trunc_cells;
 use crate::theme::{ACCENT, BORDER_DIM, CURSOR_BG, DIM, TEXT};
-use crate::widgets::{BrailleSpinner, CoverRenderer};
+use crate::widgets::{BrailleSpinner, CoverRenderer, render_scrollbar};
 
 #[derive(Debug, Clone)]
 pub struct GridCardItem {
@@ -54,9 +54,9 @@ pub fn render_cover_grid(
         frame.render_widget(
             Paragraph::new(spinner.loading_line("Loading…")),
             Rect {
-                x: area.x + 1,
+                x: area.x,
                 y: area.y,
-                width: area.width.saturating_sub(1),
+                width: area.width,
                 height: 1,
             },
         );
@@ -67,9 +67,9 @@ pub fn render_cover_grid(
         frame.render_widget(
             Paragraph::new(Line::from(empty_text).style(Style::default().fg(DIM).bg(Color::Reset))),
             Rect {
-                x: area.x + 1,
+                x: area.x,
                 y: area.y,
-                width: area.width.saturating_sub(1),
+                width: area.width,
                 height: 1,
             },
         );
@@ -77,8 +77,17 @@ pub fn render_cover_grid(
     }
 
     let (card_w, card_h) = grid_card_dims(size);
-    let cols = grid_columns_for(area.width, size);
     let visible_rows = usize::from(area.height / card_h).max(1);
+    let initial_cols = grid_columns_for(area.width, size);
+    let total_rows_est = items.len().div_ceil(initial_cols);
+    let show_scrollbar = total_rows_est > visible_rows && area.width >= card_w + 2;
+    let content_w = if show_scrollbar {
+        area.width.saturating_sub(2)
+    } else {
+        area.width
+    };
+    let cols = grid_columns_for(content_w, size);
+    let total_rows = items.len().div_ceil(cols);
 
     let clamped = cursor.min(items.len().saturating_sub(1));
     let cur_row = clamped / cols;
@@ -96,7 +105,7 @@ pub fn render_cover_grid(
                 break;
             };
             let x = area.x + (c as u16) * (card_w + 1);
-            if x + card_w > area.x + area.width {
+            if x + card_w > area.x + content_w {
                 break;
             }
 
@@ -177,5 +186,17 @@ pub fn render_cover_grid(
                 );
             }
         }
+    }
+
+    if show_scrollbar && total_rows > visible_rows {
+        render_scrollbar(
+            frame.buffer_mut(),
+            area.x + area.width - 1,
+            area.y,
+            usize::from(area.height).min(visible_rows * usize::from(card_h)),
+            total_rows * usize::from(card_h),
+            first_row * usize::from(card_h),
+            focused,
+        );
     }
 }
