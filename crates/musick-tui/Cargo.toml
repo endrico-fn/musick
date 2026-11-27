@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [[bin]]
 name = "musick"
@@ -35,9 +36,15 @@ tracing-subscriber.workspace = true
 unicode-width.workspace = true
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/musick-{ target }.tar.gz"
+pkg-url = "{ repo }/releases/download/v{ version }/musick-linux-{ target-arch }.tar.gz"
 bin-dir = "musick"
 pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides.x86_64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/musick-linux-x86_64.tar.gz"
+
+[package.metadata.binstall.overrides.aarch64-unknown-linux-gnu]
+pkg-url = "{ repo }/releases/download/v{ version }/musick-linux-aarch64.tar.gz"
 
 [dev-dependencies]
 async-trait.workspace = true
