@@ -71,13 +71,15 @@ fn split_shell_tokens(input: &str) -> Vec<String> {
     tokens
 }
 
-fn apply_header_pair(
-    raw_pair: &str,
-    cookie: &mut Option<String>,
-    auth_user: &mut String,
-    page_id: &mut Option<String>,
-    origin: &mut String,
-) {
+struct HeaderAcc {
+    cookie: Option<String>,
+    auth_user: String,
+    page_id: Option<String>,
+    origin: String,
+    visitor_id: Option<String>,
+}
+
+fn apply_header_pair(raw_pair: &str, acc: &mut HeaderAcc) {
     let pair = raw_pair.trim();
     if pair.starts_with(':') {
         // http/2 pseudo-header like `:authority:`
@@ -92,10 +94,11 @@ fn apply_header_pair(
         return;
     }
     match header_name.as_str() {
-        "cookie" => *cookie = Some(header_val.to_string()),
-        "x-goog-authuser" => *auth_user = header_val.to_string(),
-        "x-goog-pageid" => *page_id = Some(header_val.to_string()),
-        "x-origin" | "origin" => *origin = sanitize_origin(header_val),
+        "cookie" => acc.cookie = Some(header_val.to_string()),
+        "x-goog-authuser" => acc.auth_user = header_val.to_string(),
+        "x-goog-pageid" => acc.page_id = Some(header_val.to_string()),
+        "x-goog-visitor-id" => acc.visitor_id = Some(header_val.to_string()),
+        "x-origin" | "origin" => acc.origin = sanitize_origin(header_val),
         _ => {}
     }
 }
@@ -109,6 +112,8 @@ pub struct BrowserCredentials {
     pub page_id: Option<String>,
     #[serde(default = "default_origin")]
     pub origin: String,
+    #[serde(default)]
+    pub visitor_id: Option<String>,
     #[serde(default)]
     pub account_label: Option<String>,
 }
@@ -144,7 +149,8 @@ impl BrowserCredentials {
             .header("Authorization", auth_header)
             .header("X-Origin", &self.origin)
             .header("Origin", &self.origin)
-            .header("X-Goog-AuthUser", &self.auth_user);
+            .header("X-Goog-AuthUser", &self.auth_user)
+            .header("X-Youtube-Bootstrap-Logged-In", "true");
 
         if let Some(page_id) = self.page_id.as_deref().filter(|s| !s.trim().is_empty()) {
             req = req.header("X-Goog-PageId", page_id.trim());
@@ -192,10 +198,13 @@ pub fn parse_browser_headers(raw: &str) -> CoreResult<BrowserCredentials> {
         ));
     }
 
-    let mut cookie: Option<String> = None;
-    let mut auth_user = default_auth_user();
-    let mut page_id: Option<String> = None;
-    let mut origin = default_origin();
+    let mut acc = HeaderAcc {
+        cookie: None,
+        auth_user: default_auth_user(),
+        page_id: None,
+        origin: default_origin(),
+        visitor_id: None,
+    };
 
     for raw_line in trimmed.lines() {
         let line = raw_line.trim();
@@ -216,20 +225,14 @@ pub fn parse_browser_headers(raw: &str) -> CoreResult<BrowserCredentials> {
                         if let Some(val) = tokens.get(i + 1)
                             && !val.trim().is_empty()
                         {
-                            cookie = Some(val.trim().to_string());
+                            acc.cookie = Some(val.trim().to_string());
                             i += 2;
                             continue;
                         }
                     }
                     "-H" | "--header" => {
                         if let Some(val) = tokens.get(i + 1) {
-                            apply_header_pair(
-                                val,
-                                &mut cookie,
-                                &mut auth_user,
-                                &mut page_id,
-                                &mut origin,
-                            );
+                            apply_header_pair(val, &mut acc);
                             i += 2;
                             continue;
                         }
@@ -240,10 +243,10 @@ pub fn parse_browser_headers(raw: &str) -> CoreResult<BrowserCredentials> {
             }
             continue;
         }
-        apply_header_pair(line, &mut cookie, &mut auth_user, &mut page_id, &mut origin);
+        apply_header_pair(line, &mut acc);
     }
 
-    let final_cookie = match cookie {
+    let final_cookie = match acc.cookie {
         Some(c) => c,
         None => {
             if extract_sapisid(trimmed).is_some() {
@@ -264,9 +267,10 @@ pub fn parse_browser_headers(raw: &str) -> CoreResult<BrowserCredentials> {
 
     Ok(BrowserCredentials {
         cookie: final_cookie,
-        auth_user,
-        page_id,
-        origin,
+        auth_user: acc.auth_user,
+        page_id: acc.page_id,
+        origin: acc.origin,
+        visitor_id: acc.visitor_id,
         account_label: None,
     })
 }

@@ -46,7 +46,7 @@ impl InnerTubeClient {
                         ("cpn", cpn.to_string()),
                         ("ver", "2".to_string()),
                         ("c", endpoints::WEB_REMIX_CLIENT_NAME.to_string()),
-                        ("cver", endpoints::WEB_REMIX_CLIENT_VERSION.to_string()),
+                        ("cver", endpoints::web_remix_client_version()),
                         ("docid", tracking.video_id.clone()),
                     ],
                 )
@@ -70,7 +70,7 @@ impl InnerTubeClient {
                         ("cpn", cpn.to_string()),
                         ("ver", "2".to_string()),
                         ("c", endpoints::WEB_REMIX_CLIENT_NAME.to_string()),
-                        ("cver", endpoints::WEB_REMIX_CLIENT_VERSION.to_string()),
+                        ("cver", endpoints::web_remix_client_version()),
                         ("docid", tracking.video_id.clone()),
                         ("cmt", format!("{elapsed_secs:.3}")),
                         ("et", format!("{elapsed_secs:.3}")),

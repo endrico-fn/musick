@@ -263,6 +263,7 @@ impl App {
                         self.modal = None;
                         self.settings.privacy.auth_mode = AuthMode::OAuth;
                         let _ = self.settings.save(&self.services.paths.settings_file());
+                        self.services.cache.clear_visitor_data();
                         self.services.engine.try_send(AppCommand::ApplySettings {
                             settings: self.settings.clone(),
                         });

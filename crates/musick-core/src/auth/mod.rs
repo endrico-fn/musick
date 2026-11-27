@@ -199,6 +199,20 @@ impl AuthManager {
         }
     }
 
+    /// returns the browser session's visitor id when imported in browser auth mode
+    pub fn browser_visitor_id(&self) -> Option<String> {
+        let guard = self.state.read().ok()?;
+        match &*guard {
+            AuthState::Browser(c) => c
+                .visitor_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            AuthState::Anonymous | AuthState::OAuth(_) => None,
+        }
+    }
+
     pub fn set_oauth_credentials(&self, creds: OAuthCredentials) -> CoreResult<()> {
         let serialized = serde_json::to_string(&StoredCredentials::OAuth(creds.clone()))?;
         self.store.set(SECRET_CREDENTIALS_KEY, &serialized)?;

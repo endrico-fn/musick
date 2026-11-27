@@ -278,12 +278,14 @@ mod auth_tests {
 cookie: VISITOR_INFO1_LIVE=xyz; __Secure-3PAPISID=3p_secret_abc; SID=123
 x-goog-authuser: 2
 x-goog-pageid: 112233445566778899001
+x-goog-visitor-id: CgtVISITOR_TEST_123
 origin: https://music.youtube.com
 ";
         let creds = parse_browser_headers(devtools).unwrap();
         assert_eq!(creds.sapisid().as_deref(), Some("3p_secret_abc"));
         assert_eq!(creds.auth_user, "2");
         assert_eq!(creds.page_id.as_deref(), Some("112233445566778899001"));
+        assert_eq!(creds.visitor_id.as_deref(), Some("CgtVISITOR_TEST_123"));
 
         let plain = "HSID=aaa; SAPISID=direct_sapisid_99; SSID=bbb";
         let creds2 = parse_browser_headers(plain).unwrap();

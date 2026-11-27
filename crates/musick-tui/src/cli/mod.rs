@@ -187,6 +187,9 @@ pub async fn run_cli_command(
                         OAuthPollStatus::Authorized(_) => {
                             settings.privacy.auth_mode = AuthMode::OAuth;
                             settings.save(&paths.settings_file())?;
+                            if let Ok(cache) = CacheManager::open(paths, settings.cache.clone()) {
+                                cache.clear_visitor_data();
+                            }
                             println!("Authorized! Account key: {}", auth.account_key());
                             break;
                         }
@@ -197,9 +200,15 @@ pub async fn run_cli_command(
                 println!("Paste DevTools request headers or Cookie string, then press Ctrl-D:");
                 let mut raw = String::new();
                 io::stdin().read_to_string(&mut raw)?;
-                auth.import_browser_headers(&raw, page_id)?;
+                let creds = auth.import_browser_headers(&raw, page_id)?;
                 settings.privacy.auth_mode = AuthMode::Browser;
                 settings.save(&paths.settings_file())?;
+                if let Ok(cache) = CacheManager::open(paths, settings.cache.clone()) {
+                    cache.clear_visitor_data();
+                    if let Some(vd) = creds.visitor_id.as_deref() {
+                        cache.set_visitor_data(vd);
+                    }
+                }
                 println!(
                     "Browser auth stored securely. Account key: {}",
                     auth.account_key()

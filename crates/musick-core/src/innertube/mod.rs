@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::auth::AuthManager;
+use crate::config::AuthMode;
 use crate::domain::{
     Album, AlbumSummary, Artist, ArtistSummary, DiscoverFeed, Lyrics, Playlist, PlaylistSummary,
     SearchCategory, SearchItem, Track,
@@ -139,13 +140,20 @@ impl InnerTubeClient {
         format!("{}:{}", self.region(), self.auth.account_key())
     }
 
+    fn active_visitor_data(&self) -> Option<String> {
+        if let Some(vd) = self.auth.browser_visitor_id() {
+            return Some(vd);
+        }
+        self.cache.get_visitor_data()
+    }
+
     pub fn build_request_body(
         &self,
         client_kind: ClientKind,
         region: &str,
         mut payload: serde_json::Map<String, Value>,
     ) -> Value {
-        let vd = self.cache.get_visitor_data();
+        let vd = self.active_visitor_data();
         let on_behalf = self.auth.on_behalf_of_user();
         let ctx = build_context(client_kind, region, vd.as_deref(), on_behalf.as_deref());
         payload.insert("context".to_string(), ctx);
@@ -163,21 +171,48 @@ impl InnerTubeClient {
             .map(str::to_string)
             .unwrap_or_else(|| self.region());
         let body = self.build_request_body(client_kind, &region, payload);
-        let url = format!("{}/{endpoint}?prettyPrint=false", self.base_url);
+        let auth_mode = self.auth.mode();
+        let base = &self.base_url;
+        let url = if auth_mode == AuthMode::Browser {
+            let key = endpoints::YTM_API_KEY;
+            format!("{base}/{endpoint}?alt=json&key={key}")
+        } else {
+            format!("{base}/{endpoint}?alt=json")
+        };
 
-        let ua = match client_kind {
-            ClientKind::WebRemix => endpoints::WEB_USER_AGENT,
-            ClientKind::AndroidMusic => endpoints::ANDROID_MUSIC_USER_AGENT,
+        let (ua, client_id, client_ver) = match client_kind {
+            ClientKind::WebRemix => (
+                endpoints::WEB_USER_AGENT,
+                endpoints::WEB_REMIX_CLIENT_ID,
+                endpoints::web_remix_client_version(),
+            ),
+            ClientKind::AndroidMusic => (
+                endpoints::ANDROID_MUSIC_USER_AGENT,
+                endpoints::ANDROID_MUSIC_CLIENT_ID,
+                endpoints::ANDROID_MUSIC_CLIENT_VERSION.to_string(),
+            ),
         };
 
         let mut req = self
             .http
             .post(&url)
             .header("User-Agent", ua)
+            .header("Accept", "*/*")
             .header("Content-Type", "application/json")
-            .header("Accept-Language", "en-US,en;q=0.9");
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("X-YouTube-Client-Name", client_id)
+            .header("X-YouTube-Client-Version", &client_ver);
 
-        if let Some(vd) = self.cache.get_visitor_data() {
+        if client_kind == ClientKind::WebRemix {
+            req = req.header("Referer", endpoints::YTM_REFERER);
+            if auth_mode != AuthMode::Browser {
+                req = req
+                    .header("Origin", endpoints::YTM_ORIGIN)
+                    .header("X-Origin", endpoints::YTM_ORIGIN);
+            }
+        }
+
+        if let Some(vd) = self.active_visitor_data() {
             req = req.header("X-Goog-Visitor-Id", vd);
         }
 
@@ -194,10 +229,12 @@ impl InnerTubeClient {
                     || lower.contains("<title>sorry")
                     || lower.contains("captcha"))
             {
-                return Err(CoreError::Catalog(
+                let msg = if self.auth.is_authenticated() {
+                    "YouTube Music blocked requests from this network (HTTP 403) — try switching network/VPN, refreshing Browser Auth, or retrying later"
+                } else {
                     "YouTube Music blocked anonymous requests from this network (HTTP 403) — try again later, switch network, or sign in in 5 Settings"
-                        .to_string(),
-                ));
+                };
+                return Err(CoreError::Catalog(msg.to_string()));
             }
             if status.as_u16() == 429 {
                 return Err(CoreError::Catalog(

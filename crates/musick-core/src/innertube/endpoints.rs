@@ -1,17 +1,43 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::domain::{SearchCategory, Track};
 
 pub const INNERTUBE_BASE_URL: &str = "https://music.youtube.com/youtubei/v1";
+pub const YTM_ORIGIN: &str = "https://music.youtube.com";
+pub const YTM_REFERER: &str = "https://music.youtube.com/";
+pub const YTM_API_KEY: &str = "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30";
 pub const WEB_REMIX_CLIENT_NAME: &str = "WEB_REMIX";
+pub const WEB_REMIX_CLIENT_ID: &str = "67";
 pub const WEB_REMIX_CLIENT_VERSION: &str = "1.20260101.01.00";
 pub const ANDROID_MUSIC_CLIENT_NAME: &str = "ANDROID_MUSIC";
+pub const ANDROID_MUSIC_CLIENT_ID: &str = "21";
 pub const ANDROID_MUSIC_CLIENT_VERSION: &str = "7.29.52";
 pub const WEB_USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64; rv:136.0) Gecko/20100101 Firefox/136.0";
 pub const ANDROID_MUSIC_USER_AGENT: &str =
     "com.google.android.apps.youtube.music/7.29.52 (Linux; U; Android 14) gzip";
+
+/// return a fresh `1.YYYYMMDD.01.00` client version for today's utc date
+pub fn web_remix_client_version() -> String {
+    let Ok(dur) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+        return WEB_REMIX_CLIENT_VERSION.to_string();
+    };
+    let days = (dur.as_secs() / 86_400) as i64;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("1.{year:04}{m:02}{d:02}.01.00")
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientKind {
@@ -46,7 +72,7 @@ pub fn build_context(
     let mut client = match client_kind {
         ClientKind::WebRemix => json!({
             "clientName": WEB_REMIX_CLIENT_NAME,
-            "clientVersion": WEB_REMIX_CLIENT_VERSION,
+            "clientVersion": web_remix_client_version(),
             "hl": "en",
             "gl": gl,
         }),

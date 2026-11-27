@@ -211,10 +211,14 @@ impl App {
                         Some(page_id.trim().to_string())
                     };
                     match self.services.auth.import_browser_headers(raw_headers, pid) {
-                        Ok(_) => {
+                        Ok(creds) => {
                             keep = false;
                             self.settings.privacy.auth_mode = AuthMode::Browser;
                             let _ = self.settings.save(&self.services.paths.settings_file());
+                            self.services.cache.clear_visitor_data();
+                            if let Some(vd) = creds.visitor_id.as_deref() {
+                                self.services.cache.set_visitor_data(vd);
+                            }
                             self.services.engine.try_send(AppCommand::ApplySettings {
                                 settings: self.settings.clone(),
                             });
