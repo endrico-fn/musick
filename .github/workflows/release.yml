@@ -23,19 +23,9 @@ jobs:
           - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             asset: musick-linux-x86_64
-            flags: "--no-default-features"
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            asset: musick-fast-linux-x86_64
-            flags: ""
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             asset: musick-linux-aarch64
-            flags: "--no-default-features"
-          - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            asset: musick-fast-linux-aarch64
-            flags: ""
 
     steps:
       - name: Checkout repository
@@ -50,7 +40,7 @@ jobs:
           key: release-${{ matrix.asset }}
 
       - name: Build release binary
-        run: cargo build --release --locked -p musick-tui ${{ matrix.flags }}
+        run: cargo build --release --locked -p musick-tui
 
       - name: CLI smoke check
         run: |

@@ -79,6 +79,7 @@ pub struct PlayerView {
     pub results_cursor: usize,
     pub results_scroll: ScrollState,
     pub loading_search: bool,
+    pub search_error: Option<String>,
 
     pub lyrics_scroll: isize,
 }
@@ -114,6 +115,7 @@ impl PlayerView {
             results_cursor: 0,
             results_scroll: ScrollState::new(),
             loading_search: false,
+            search_error: None,
             lyrics_scroll: 0,
         }
     }
@@ -169,9 +171,19 @@ impl PlayerView {
     pub fn set_search_results(&mut self, items: Vec<SearchItem>) {
         self.search_results = items;
         self.loading_search = false;
+        self.search_error = None;
         self.results_cursor = 0;
         if self.mode == PlayerPanelMode::SearchInput || self.mode == PlayerPanelMode::SearchResults
         {
+            self.mode = PlayerPanelMode::SearchResults;
+        }
+    }
+
+    pub fn set_search_error(&mut self, msg: String) {
+        self.loading_search = false;
+        self.search_results.clear();
+        self.search_error = Some(msg);
+        if self.mode == PlayerPanelMode::SearchInput {
             self.mode = PlayerPanelMode::SearchResults;
         }
     }

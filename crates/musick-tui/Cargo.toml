@@ -13,10 +13,6 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
-[features]
-default = ["fast-resolver"]
-fast-resolver = ["musick-audio/fast-resolver"]
-
 [dependencies]
 base64.workspace = true
 clap.workspace = true
@@ -24,7 +20,7 @@ crossterm.workspace = true
 hex.workspace = true
 image.workspace = true
 lru.workspace = true
-musick-audio = { path = "../musick-audio", default-features = false }
+musick-audio = { path = "../musick-audio" }
 musick-core = { path = "../musick-core" }
 ratatui.workspace = true
 ratatui-image.workspace = true

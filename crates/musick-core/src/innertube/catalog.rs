@@ -72,9 +72,9 @@ impl InnerTubeClient {
             })
             .collect();
         let mut pages = 0usize;
-        while items.len() < limit
+        while items.len() < limit.min(20)
             && let Some(token) = cont.take()
-            && pages < 3
+            && pages < 1
         {
             pages += 1;
             let mut map = serde_json::Map::new();
@@ -188,31 +188,30 @@ impl InnerTubeClient {
         let out = if category == SearchCategory::All {
             let mut map_all = serde_json::Map::new();
             map_all.insert("query".into(), json!(q));
-            let mut map_songs = serde_json::Map::new();
-            map_songs.insert("query".into(), json!(q));
-            if let Some(p) = search_filter_params(SearchCategory::Songs) {
-                map_songs.insert("params".into(), json!(p));
-            }
+            let raw_all = self
+                .post_json("search", ClientKind::WebRemix, None, map_all)
+                .await?;
+            let (parsed_all, cont_all) = parsers::parse_search_results_with_continuation(&raw_all);
 
-            let (res_all, res_songs) = tokio::join!(
-                self.post_json("search", ClientKind::WebRemix, None, map_all),
-                self.post_json("search", ClientKind::WebRemix, None, map_songs),
-            );
-
-            if res_songs.is_err()
-                && let Err(e) = res_all
-            {
-                return Err(e);
-            }
-
-            let (parsed_all, cont_all) = res_all
-                .as_ref()
-                .map(parsers::parse_search_results_with_continuation)
-                .unwrap_or_default();
-            let (parsed_songs, cont_songs) = res_songs
-                .as_ref()
-                .map(parsers::parse_search_results_with_continuation)
-                .unwrap_or_default();
+            // enrich with a songs query only when `all` returned few items or tracks missing album info
+            let needs_song_enrichment = parsed_all.len() < limit.min(20)
+                || parsed_all
+                    .iter()
+                    .any(|it| matches!(it, SearchItem::Track(t) if t.album.is_none()));
+            let (parsed_songs, cont_songs) = if needs_song_enrichment {
+                let mut map_songs = serde_json::Map::new();
+                map_songs.insert("query".into(), json!(q));
+                if let Some(p) = search_filter_params(SearchCategory::Songs) {
+                    map_songs.insert("params".into(), json!(p));
+                }
+                self.post_json("search", ClientKind::WebRemix, None, map_songs)
+                    .await
+                    .as_ref()
+                    .map(parsers::parse_search_results_with_continuation)
+                    .unwrap_or_default()
+            } else {
+                (Vec::new(), None)
+            };
 
             let song_by_vid: HashMap<String, Track> = parsed_songs
                 .iter()
@@ -266,12 +265,11 @@ impl InnerTubeClient {
                 }
             }
             let cont = cont_songs.or(cont_all);
-            if merged.len() < limit && cont.is_some() {
+            if merged.len() < limit.min(20) && cont.is_some() {
                 merged = self.paginate_search_page(merged, cont, limit).await;
             }
             if merged.is_empty()
-                && let Some(corrected) =
-                    res_all.as_ref().ok().and_then(parsers::parse_spelling_hint)
+                && let Some(corrected) = parsers::parse_spelling_hint(&raw_all)
                 && !corrected.eq_ignore_ascii_case(q)
             {
                 let mut map_corr = serde_json::Map::new();
@@ -315,7 +313,9 @@ impl InnerTubeClient {
         };
 
         let capped: Vec<SearchItem> = out.into_iter().take(limit).collect();
-        self.cache.put_catalog(&cache_key, &capped, None);
+        if !capped.is_empty() {
+            self.cache.put_catalog(&cache_key, &capped, None);
+        }
         Ok(capped)
     }
 

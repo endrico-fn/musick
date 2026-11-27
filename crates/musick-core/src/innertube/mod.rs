@@ -188,6 +188,30 @@ impl InnerTubeClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let txt = resp.text().await.unwrap_or_default();
+            let lower = txt.to_ascii_lowercase();
+            if status.as_u16() == 403
+                && (lower.contains("automated queries")
+                    || lower.contains("<title>sorry")
+                    || lower.contains("captcha"))
+            {
+                return Err(CoreError::Catalog(
+                    "YouTube Music blocked anonymous requests from this network (HTTP 403) — try again later, switch network, or sign in in 5 Settings"
+                        .to_string(),
+                ));
+            }
+            if status.as_u16() == 429 {
+                return Err(CoreError::Catalog(
+                    "YouTube Music rate-limited requests (HTTP 429) — wait a moment and retry"
+                        .to_string(),
+                ));
+            }
+            if lower.trim_start().starts_with("<!doctype")
+                || lower.trim_start().starts_with("<html")
+            {
+                return Err(CoreError::Catalog(format!(
+                    "InnerTube {endpoint} returned HTTP {status}"
+                )));
+            }
             let snippet: String = txt.chars().take(200).collect();
             return Err(CoreError::Catalog(format!(
                 "InnerTube {endpoint} HTTP {status}: {snippet}"

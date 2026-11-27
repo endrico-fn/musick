@@ -3,15 +3,10 @@ set -eu
 
 REPO="endrico-fn/musick"
 INSTALL_DIR="${MUSICK_INSTALL_DIR:-$HOME/.local/bin}"
-FAST=0
 VERSION=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --fast)
-            FAST=1
-            shift
-            ;;
         --version)
             VERSION="${2:-}"
             shift 2
@@ -22,10 +17,9 @@ while [ $# -gt 0 ]; do
             ;;
         -h|--help)
             cat <<'EOF'
-Usage: install.sh [--fast] [--version vX.Y.Z] [--dir PATH]
+Usage: install.sh [--version vX.Y.Z] [--dir PATH]
 
 Options:
-  --fast            Install fast-resolver build (with GPL-3.0 rustypipe)
   --version vX.Y.Z  Install a specific release tag (default: latest)
   --dir PATH        Destination directory (default: ~/.local/bin)
 EOF
@@ -54,11 +48,7 @@ case "$ARCH" in
         ;;
 esac
 
-if [ "$FAST" -eq 1 ]; then
-    ASSET="musick-fast-linux-${ARCH}.tar.gz"
-else
-    ASSET="musick-linux-${ARCH}.tar.gz"
-fi
+ASSET="musick-linux-${ARCH}.tar.gz"
 
 if [ -z "$VERSION" ]; then
     BASE_URL="https://github.com/${REPO}/releases/latest/download"

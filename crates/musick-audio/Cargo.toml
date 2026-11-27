@@ -8,17 +8,11 @@ license.workspace = true
 [lints]
 workspace = true
 
-[features]
-default = ["fast-resolver"]
-fast-resolver = ["dep:rustypipe", "dep:reqwest"]
-
 [dependencies]
 async-trait.workspace = true
 lru.workspace = true
 musick-core = { path = "../musick-core" }
 rand.workspace = true
-reqwest = { workspace = true, optional = true }
-rustypipe = { workspace = true, optional = true }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

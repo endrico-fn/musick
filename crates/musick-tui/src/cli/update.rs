@@ -9,14 +9,13 @@ use tokio::process::Command;
 
 const REPO: &str = "endrico-fn/musick";
 
-pub fn release_asset_name(arch: &str, fast: bool) -> Option<String> {
+pub fn release_asset_name(arch: &str) -> Option<String> {
     let normalized_arch = match arch {
         "x86_64" | "amd64" => "x86_64",
         "aarch64" | "arm64" => "aarch64",
         _ => return None,
     };
-    let prefix = if fast { "musick-fast" } else { "musick" };
-    Some(format!("{prefix}-linux-{normalized_arch}.tar.gz"))
+    Some(format!("musick-linux-{normalized_arch}.tar.gz"))
 }
 
 pub fn parse_sha256sums(sums_text: &str, asset_name: &str) -> Option<String> {
@@ -35,15 +34,11 @@ pub fn parse_sha256sums(sums_text: &str, asset_name: &str) -> Option<String> {
     None
 }
 
-pub async fn run_update(
-    fast_flag: bool,
-    check_only: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn run_update(check_only: bool) -> Result<(), Box<dyn std::error::Error>> {
     if std::env::consts::OS != "linux" {
         return Err("musick update currently supports Linux prebuilt releases only".into());
     }
-    let use_fast = fast_flag || cfg!(feature = "fast-resolver");
-    let asset_name = release_asset_name(std::env::consts::ARCH, use_fast)
+    let asset_name = release_asset_name(std::env::consts::ARCH)
         .ok_or_else(|| format!("Unsupported architecture: {}", std::env::consts::ARCH))?;
 
     let client = reqwest::Client::builder()

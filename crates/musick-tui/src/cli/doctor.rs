@@ -65,14 +65,9 @@ pub async fn run_doctor(
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!("musick {} doctor", env!("CARGO_PKG_VERSION"));
     println!(
-        "Build:    {} {} ({})",
+        "Build:    {} {} (mit)",
         std::env::consts::OS,
         std::env::consts::ARCH,
-        if cfg!(feature = "fast-resolver") {
-            "fast-resolver"
-        } else {
-            "mit-only"
-        }
     );
 
     println!("\nRuntime binaries:");

@@ -1,13 +1,13 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use musick_core::{SearchCategory, Track};
 
-use crate::text::{Align, trunc_cells};
-use crate::theme::{accent_style, base_style, cover_panel_block, dim_style, panel_block};
+use crate::text::{Align, trunc_cells, wrap_cells};
+use crate::theme::{ERR, accent_style, base_style, cover_panel_block, dim_style, panel_block};
 use crate::views::RenderCtx;
 use crate::widgets::{
     CavaWidget, ColumnDef, CoverRenderer, LyricsBox, MediaListItem, SectionTabs, TableRow,
@@ -213,6 +213,8 @@ impl PlayerView {
                 "Search",
                 Some(if self.loading_search {
                     ctx.spinner.inline_text("Searching")
+                } else if self.search_error.is_some() {
+                    "Error".to_string()
                 } else {
                     format!("{} results", self.search_results.len())
                 }),
@@ -471,6 +473,22 @@ impl PlayerView {
                         },
                         parts[2],
                     );
+                } else if !self.loading_search
+                    && let Some(ref err_msg) = self.search_error
+                {
+                    let w = usize::from(parts[2].width).max(12);
+                    let mut lines: Vec<Line<'static>> = wrap_cells(err_msg, w)
+                        .into_iter()
+                        .map(|ln| {
+                            Line::from(Span::styled(ln, Style::default().fg(ERR).bg(Color::Reset)))
+                        })
+                        .collect();
+                    lines.push(Line::raw(""));
+                    lines.push(Line::from(Span::styled(
+                        "Press / to retry, Tab to switch category, or Esc for Discover",
+                        dim_style(),
+                    )));
+                    frame.render_widget(Paragraph::new(lines), parts[2]);
                 } else {
                     let playing_vid = ctx.snapshot.track.as_ref().map(|t| t.video_id.as_str());
                     let items: Vec<MediaListItem> = self

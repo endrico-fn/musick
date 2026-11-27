@@ -8,8 +8,6 @@ use lru::LruCache;
 use tokio::process::Command;
 use tracing::debug;
 
-#[cfg(feature = "fast-resolver")]
-use musick_core::ensure_private_dir;
 use musick_core::{AppPaths, AudioQuality, SingleFlight, is_valid_video_id};
 
 use crate::error::{AudioError, AudioResult};
@@ -95,130 +93,6 @@ pub fn parse_stream_expiry(url: &str, now_secs: f64, default_ttl_secs: f64) -> f
 pub trait StreamBackend: Send + Sync {
     async fn resolve(&self, video_id: &str, quality: AudioQuality) -> AudioResult<RawStream>;
 }
-
-// ── Optional Fast-Path: RustyPipe (GPL-3.0, feature-gated `fast-resolver`) ──
-
-#[cfg(feature = "fast-resolver")]
-pub struct RustyPipeBackend {
-    client: rustypipe::client::RustyPipe,
-    probe_http: reqwest::Client,
-}
-
-#[cfg(feature = "fast-resolver")]
-impl RustyPipeBackend {
-    pub fn new(paths: &AppPaths) -> AudioResult<Self> {
-        let rp_dir = paths.rustypipe_cache_dir();
-        let _ = ensure_private_dir(&rp_dir);
-        let client = rustypipe::client::RustyPipe::builder()
-            .storage_dir(rp_dir)
-            .no_reporter()
-            .timeout(Duration::from_secs(12))
-            .build()
-            .map_err(|e| AudioError::Resolver(format!("RustyPipe init failed: {e}")))?;
-        let probe_http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(4))
-            .connect_timeout(Duration::from_secs(3))
-            .build()
-            .unwrap_or_default();
-        Ok(Self { client, probe_http })
-    }
-}
-
-#[cfg(feature = "fast-resolver")]
-#[async_trait]
-impl StreamBackend for RustyPipeBackend {
-    async fn resolve(&self, video_id: &str, quality: AudioQuality) -> AudioResult<RawStream> {
-        if !is_valid_video_id(video_id) {
-            return Err(AudioError::Resolver(format!(
-                "Invalid video ID: {video_id}"
-            )));
-        }
-        let player = self
-            .client
-            .query()
-            .player(video_id)
-            .await
-            .map_err(|e| AudioError::Resolver(format!("RustyPipe player failed: {e}")))?;
-
-        let mut streams = player.audio_streams;
-        streams.retain(|s| !s.url.is_empty());
-        if streams.is_empty() {
-            return Err(AudioError::Resolver(
-                "RustyPipe returned zero audio streams".into(),
-            ));
-        }
-
-        let is_opus = |s: &rustypipe::model::AudioStream| {
-            s.mime.to_ascii_lowercase().contains("opus")
-                || format!("{:?}", s.codec)
-                    .to_ascii_lowercase()
-                    .contains("opus")
-        };
-
-        let picked = match quality {
-            AudioQuality::Best => streams
-                .iter()
-                .max_by_key(|s| (u32::from(is_opus(s)), s.average_bitrate.max(s.bitrate))),
-            AudioQuality::Balanced => streams
-                .iter()
-                .filter(|s| s.average_bitrate.max(s.bitrate) <= 150_000)
-                .max_by_key(|s| (u32::from(is_opus(s)), s.average_bitrate.max(s.bitrate)))
-                .or_else(|| {
-                    streams
-                        .iter()
-                        .min_by_key(|s| s.average_bitrate.max(s.bitrate))
-                }),
-            AudioQuality::Saver => streams
-                .iter()
-                .filter(|s| {
-                    let b = s.average_bitrate.max(s.bitrate);
-                    (40_000..=85_000).contains(&b)
-                })
-                .min_by_key(|s| s.average_bitrate.max(s.bitrate))
-                .or_else(|| {
-                    streams
-                        .iter()
-                        .min_by_key(|s| s.average_bitrate.max(s.bitrate))
-                }),
-        }
-        .ok_or_else(|| AudioError::Resolver("No suitable RustyPipe audio stream".into()))?;
-
-        // Probe first byte to ensure googlevideo does not reject this URL with HTTP 403
-        // (e.g. when rustypipe-botguard is not installed and iOS/TV clients are throttled/blocked).
-        let probe = self
-            .probe_http
-            .get(&picked.url)
-            .header(reqwest::header::RANGE, "bytes=0-0")
-            .send()
-            .await
-            .map_err(|e| AudioError::Resolver(format!("RustyPipe stream probe failed: {e}")))?;
-        if !probe.status().is_success() {
-            return Err(AudioError::Resolver(format!(
-                "RustyPipe stream rejected with HTTP {}",
-                probe.status()
-            )));
-        }
-
-        let codec = if is_opus(picked) {
-            "opus".to_string()
-        } else if picked.mime.to_ascii_lowercase().contains("mp4") {
-            "aac".to_string()
-        } else {
-            format!("{:?}", picked.codec).to_ascii_lowercase()
-        };
-        let kbps = picked.average_bitrate.max(picked.bitrate) / 1000;
-
-        Ok(RawStream {
-            url: picked.url.clone(),
-            codec,
-            bitrate: kbps,
-            sample_rate: 48_000,
-            user_agent: None,
-        })
-    }
-}
-
-// ── Fallback Backend: yt-dlp (strictly --no-cookies) ────────────────────────
 
 pub struct YtDlpBackend {
     binary: String,
@@ -381,19 +255,9 @@ pub struct HybridStreamResolver {
 }
 
 impl HybridStreamResolver {
-    pub fn new(paths: &AppPaths, quality: AudioQuality) -> Self {
-        #[cfg(feature = "fast-resolver")]
-        let fast: Option<Arc<dyn StreamBackend>> = RustyPipeBackend::new(paths)
-            .ok()
-            .map(|b| Arc::new(b) as Arc<dyn StreamBackend>);
-        #[cfg(not(feature = "fast-resolver"))]
-        let fast: Option<Arc<dyn StreamBackend>> = {
-            let _ = paths;
-            None
-        };
-
+    pub fn new(_paths: &AppPaths, quality: AudioQuality) -> Self {
         Self::with_backends(
-            fast,
+            None,
             Arc::new(YtDlpBackend::new()),
             quality,
             Arc::new(now_unix_f64),

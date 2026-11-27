@@ -10,19 +10,13 @@ Full-Rust TUI streaming audio player for YouTube Music — keyboard-driven, cook
 curl -fsSL https://raw.githubusercontent.com/endrico-fn/musick/main/scripts/install.sh | sh
 ```
 
-- Installs the default prebuilt binary (`x86_64` / `aarch64`) to `~/.local/bin/musick`.
-- Pass `--fast` for the optional fast-resolver variant (`rustypipe`, GPL-3.0).
+- Downloads the verified prebuilt Linux binary (`x86_64` / `aarch64`, MIT) to `~/.local/bin/musick`.
 - Update any time without recompiling:
 
 ```sh
 musick update           # download & verify latest release
 musick update --check   # check for updates only
-musick update --fast    # switch to / update fast-resolver variant
 ```
-
-### Arch Linux (AUR)
-
-A ready-to-publish [`PKGBUILD`](packaging/aur/PKGBUILD) (`musick-bin`) is provided in `packaging/aur/`.
 
 ### Cargo Binstall / From Source
 
@@ -60,7 +54,7 @@ musick doctor
 musick                              # Launch TUI
 musick --log-file /tmp/musick.log   # Launch with debug logging (or set MUSICK_LOG=debug)
 musick doctor [--offline]           # Check mpv, yt-dlp, cava, terminal graphics & network
-musick update [--check] [--fast]    # Self-update from GitHub Releases (SHA256 verified)
+musick update [--check]             # Self-update from GitHub Releases (SHA256 verified)
 musick auth status                  # Inspect auth & telemetry state
 musick auth oauth --client-id <ID> --client-secret <SECRET>
 musick auth browser                 # Import DevTools headers, curl snippet, or Cookie via stdin

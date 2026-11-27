@@ -59,6 +59,7 @@ impl PlayerView {
                 };
                 self.mode = PlayerPanelMode::SearchResults;
                 self.loading_search = true;
+                self.search_error = None;
                 self.search_results.clear();
                 self.results_cursor = 0;
                 self.results_scroll.reset();
@@ -98,6 +99,7 @@ impl PlayerView {
                     .unwrap_or(0);
                 self.search_category = cats[(idx + 1) % cats.len()];
                 self.loading_search = true;
+                self.search_error = None;
                 self.search_results.clear();
                 self.results_cursor = 0;
                 self.results_scroll.reset();
@@ -114,6 +116,7 @@ impl PlayerView {
                     .unwrap_or(0);
                 self.search_category = cats[(idx + cats.len() - 1) % cats.len()];
                 self.loading_search = true;
+                self.search_error = None;
                 self.search_results.clear();
                 self.results_cursor = 0;
                 self.results_scroll.reset();

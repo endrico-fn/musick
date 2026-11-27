@@ -56,7 +56,7 @@ impl App {
                         self.refresh_cache_stats();
                     }
                     Err(err) => {
-                        self.player.loading_search = false;
+                        self.player.set_search_error(err.clone());
                         self.set_toast(format!("Search error: {err}"));
                     }
                 }

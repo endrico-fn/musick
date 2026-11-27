@@ -54,9 +54,6 @@ pub enum Commands {
     },
     /// download and verify the latest prebuilt linux release from github
     Update {
-        /// install the fast-resolver variant (gpl-3.0 rustypipe)
-        #[arg(long)]
-        fast: bool,
         /// only check if a newer release is available without modifying the binary
         #[arg(long)]
         check: bool,
@@ -138,7 +135,7 @@ pub async fn run_cli_command(
 ) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         Commands::Doctor { offline } => return doctor::run_doctor(paths, &settings, offline).await,
-        Commands::Update { fast, check } => return update::run_update(fast, check).await,
+        Commands::Update { check } => return update::run_update(check).await,
         _ => {}
     }
 

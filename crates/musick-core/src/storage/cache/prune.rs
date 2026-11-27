@@ -185,7 +185,6 @@ impl CacheManager {
         }
 
         clear_dir_contents(&self.images_dir);
-        clear_dir_contents(&self.rustypipe_dir);
         Ok(())
     }
 }

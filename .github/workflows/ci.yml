@@ -43,11 +43,6 @@ jobs:
       - name: Run workspace test suite
         run: cargo test --workspace --locked
 
-      - name: Verify MIT-only build (--no-default-features)
-        run: |
-          cargo check -p musick-audio --no-default-features --locked
-          cargo check -p musick-tui --no-default-features --locked
-
   release-linux:
     name: Release Build & CLI Smoke Test (Linux x86_64)
     runs-on: ubuntu-latest

@@ -85,10 +85,6 @@ impl AppPaths {
         self.cache_dir.join("images")
     }
 
-    pub fn rustypipe_cache_dir(&self) -> PathBuf {
-        self.cache_dir.join("rustypipe")
-    }
-
     pub fn mpv_socket_path(&self) -> PathBuf {
         self.runtime_dir
             .join(format!("mpv-{}.sock", std::process::id()))
@@ -99,7 +95,6 @@ impl AppPaths {
         ensure_private_dir(&self.data_dir)?;
         ensure_private_dir(&self.cache_dir)?;
         ensure_private_dir(&self.images_cache_dir())?;
-        ensure_private_dir(&self.rustypipe_cache_dir())?;
         ensure_private_dir(&self.runtime_dir)?;
         Ok(())
     }

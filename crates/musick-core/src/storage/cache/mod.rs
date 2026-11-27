@@ -52,7 +52,6 @@ pub(super) struct L1CatalogEntry {
 pub struct CacheManager {
     pub(super) conn: Mutex<Connection>,
     pub(super) images_dir: PathBuf,
-    pub(super) rustypipe_dir: PathBuf,
     pub(super) settings: RwLock<CacheSettings>,
     pub(super) l1_catalog: Mutex<LruCache<String, L1CatalogEntry>>,
     pub(super) l1_lyrics: Mutex<LruCache<String, Lyrics>>,
@@ -74,8 +73,6 @@ impl CacheManager {
         ensure_private_dir(&paths.cache_dir)?;
         let images_dir = paths.images_cache_dir();
         ensure_private_dir(&images_dir)?;
-        let rustypipe_dir = paths.rustypipe_cache_dir();
-        ensure_private_dir(&rustypipe_dir)?;
 
         let conn = Connection::open(paths.cache_db_file())?;
         migrate_cache_db(&conn)?;
@@ -83,7 +80,6 @@ impl CacheManager {
         Ok(Self {
             conn: Mutex::new(conn),
             images_dir,
-            rustypipe_dir,
             settings: RwLock::new(settings),
             l1_catalog: Mutex::new(LruCache::new(non_zero(L1_CATALOG_CAP))),
             l1_lyrics: Mutex::new(LruCache::new(non_zero(L1_LYRICS_CAP))),
