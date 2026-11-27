@@ -476,14 +476,14 @@ curl 'https://music.youtube.com/youtubei/v1/browse' \\
             "[display]\ncava_palette = \"aurora\"\naccent = \"magenta\"\n",
         )
         .unwrap();
-        let loaded = Settings::load(&file);
+        let loaded = musick_core::Settings::load(&file);
         assert_eq!(loaded.display.accent, musick_core::ThemeAccent::Magenta);
         assert_eq!(
             loaded.display.accent.toggle(),
             musick_core::ThemeAccent::Teal
         );
         assert_eq!(
-            Settings::default().display.accent,
+            musick_core::Settings::default().display.accent,
             musick_core::ThemeAccent::Teal
         );
     }
