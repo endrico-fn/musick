@@ -334,9 +334,9 @@ impl App {
                 self.services.engine.try_send(AppCommand::TogglePause);
             }
             ContextMenuAction::PlayNext => {
-                self.services
-                    .engine
-                    .try_send(AppCommand::PlayNext { tracks: vec![playing] });
+                self.services.engine.try_send(AppCommand::PlayNext {
+                    tracks: vec![playing],
+                });
             }
             ContextMenuAction::AddToQueue => {
                 self.services.engine.try_send(AppCommand::AppendTracks {

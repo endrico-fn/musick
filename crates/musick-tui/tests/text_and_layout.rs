@@ -621,7 +621,9 @@ mod widget_render_tests {
         // Verify Cava bars rendered magenta hues (r > g)
         let has_magenta_bar = (20..40).any(|x| {
             (0..8).any(|y| match buf[(x, y)].fg {
-                ratatui::style::Color::Rgb(r, g, b) => r > g && b > g && buf[(x, y)].symbol() != " ",
+                ratatui::style::Color::Rgb(r, g, b) => {
+                    r > g && b > g && buf[(x, y)].symbol() != " "
+                }
                 _ => false,
             })
         });

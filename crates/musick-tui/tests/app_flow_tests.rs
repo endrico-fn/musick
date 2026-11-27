@@ -2029,14 +2029,13 @@ async fn cross_entity_jumps_and_opt_in_session_restore_roundtrip() {
     // 5. Quick A/a jumps on hovered Artist open Profile vs ArtistTab::Albums, and fallback to playing track in Lyrics/Settings
     app.dispatch_action(Action::SwitchTab(0));
     app.player.mode = PlayerPanelMode::SearchResults;
-    app.player.set_search_results(vec![SearchItem::Artist(
-        musick_core::ArtistSummary {
+    app.player
+        .set_search_results(vec![SearchItem::Artist(musick_core::ArtistSummary {
             browse_id: "UC_ciara".into(),
             name: "Ciara".into(),
             subtitle: Some("Artist".into()),
             thumbs: Vec::new(),
-        },
-    )]);
+        })]);
     app.dispatch_action(Action::GoAlbum);
     assert!(matches!(
         app.nav_stack.last(),

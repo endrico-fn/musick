@@ -482,7 +482,10 @@ curl 'https://music.youtube.com/youtubei/v1/browse' \\
             loaded.display.accent.toggle(),
             musick_core::ThemeAccent::Teal
         );
-        assert_eq!(Settings::default().display.accent, musick_core::ThemeAccent::Teal);
+        assert_eq!(
+            Settings::default().display.accent,
+            musick_core::ThemeAccent::Teal
+        );
     }
 
     #[test]
@@ -537,10 +540,14 @@ curl 'https://music.youtube.com/youtubei/v1/browse' \\
         assert!(is_trusted_google_url(
             "https://music.youtube.com/youtubei/v1/browse"
         ));
-        assert!(!is_trusted_google_url("http://s.youtube.com/api/stats/playback"));
+        assert!(!is_trusted_google_url(
+            "http://s.youtube.com/api/stats/playback"
+        ));
         assert!(!is_trusted_google_url("https://youtube.com@evil.com/steal"));
         assert!(!is_trusted_google_url("https://evil-youtube.com/steal"));
-        assert!(!is_trusted_google_url("https://evil.com/?https://youtube.com"));
+        assert!(!is_trusted_google_url(
+            "https://evil.com/?https://youtube.com"
+        ));
     }
 
     #[cfg(unix)]

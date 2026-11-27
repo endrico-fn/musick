@@ -256,7 +256,8 @@ impl App {
                                 })
                                 .await;
                             } else {
-                                let _ = tx.send(BgMsg::Toast("Artist has no playable songs".into()));
+                                let _ =
+                                    tx.send(BgMsg::Toast("Artist has no playable songs".into()));
                             }
                         }
                         Err(err) => {

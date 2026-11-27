@@ -17,7 +17,11 @@ fn is_trusted_github_url(raw: &str) -> bool {
     if authority.is_empty() || authority.contains('@') {
         return false;
     }
-    let host = authority.split(':').next().unwrap_or("").to_ascii_lowercase();
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
     host == "github.com" || host.ends_with(".githubusercontent.com")
 }
 

@@ -306,8 +306,12 @@ impl NowPlayingBar<'_> {
                 let pad = content_w - left_w - vol_total_w;
                 let vol_start_x = content_x.saturating_add((left_w + pad) as u16);
                 hit.volume_mute = Rect::new(vol_start_x, row2_y, vol_prefix_w as u16, 1);
-                hit.volume_bar =
-                    Rect::new(vol_start_x.saturating_add(vol_prefix_w as u16 + 1), row2_y, 10, 1);
+                hit.volume_bar = Rect::new(
+                    vol_start_x.saturating_add(vol_prefix_w as u16 + 1),
+                    row2_y,
+                    10,
+                    1,
+                );
 
                 let prefix_style = if vol_focused {
                     Style::default()
@@ -321,12 +325,18 @@ impl NowPlayingBar<'_> {
 
                 spans.push(Span::raw(" ".repeat(pad)));
                 spans.push(Span::styled(vol_prefix, prefix_style));
-                spans.push(Span::styled("▕", Style::default().fg(wall_fg).bg(Color::Reset)));
+                spans.push(Span::styled(
+                    "▕",
+                    Style::default().fg(wall_fg).bg(Color::Reset),
+                ));
                 spans.push(Span::styled(
                     vol_bar,
                     Style::default().fg(vol_color).bg(Color::Reset),
                 ));
-                spans.push(Span::styled("▏", Style::default().fg(wall_fg).bg(Color::Reset)));
+                spans.push(Span::styled(
+                    "▏",
+                    Style::default().fg(wall_fg).bg(Color::Reset),
+                ));
                 spans.push(Span::styled(
                     vol_pct,
                     Style::default().fg(vol_pct_color).bg(Color::Reset),

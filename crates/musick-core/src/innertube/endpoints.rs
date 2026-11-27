@@ -51,8 +51,10 @@ pub fn is_trusted_google_url(raw: &str) -> bool {
         return false;
     };
     let host = host.to_ascii_lowercase();
-    matches!(host.as_str(), "youtube.com" | "google.com" | "googleapis.com")
-        || host.ends_with(".youtube.com")
+    matches!(
+        host.as_str(),
+        "youtube.com" | "google.com" | "googleapis.com"
+    ) || host.ends_with(".youtube.com")
         || host.ends_with(".google.com")
         || host.ends_with(".googleapis.com")
 }

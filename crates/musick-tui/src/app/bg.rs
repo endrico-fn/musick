@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use musick_core::{
-    AppCommand, AuthMode, OAuthPollStatus, SearchItem, Track, YoutubeTarget,
-    extract_youtube_target,
+    AppCommand, AuthMode, OAuthPollStatus, SearchItem, Track, YoutubeTarget, extract_youtube_target,
 };
 
 use crate::widgets::ActiveModal;
@@ -273,7 +272,8 @@ impl App {
                     Ok(OAuthPollStatus::Authorized(_)) => {
                         self.modal = None;
                         self.settings.privacy.auth_mode = AuthMode::OAuth;
-                        self.settings_view.secret_backend = self.services.auth.secret_backend_label();
+                        self.settings_view.secret_backend =
+                            self.services.auth.secret_backend_label();
                         let _ = self.settings.save(&self.services.paths.settings_file());
                         self.services.cache.clear_visitor_data();
                         self.services.engine.try_send(AppCommand::ApplySettings {

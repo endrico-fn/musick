@@ -460,12 +460,7 @@ pub fn render_modal(
                 0
             };
             let row_w = usize::from(inner.width);
-            for (i, item) in items
-                .iter()
-                .enumerate()
-                .skip(scroll_start)
-                .take(visible_h)
-            {
+            for (i, item) in items.iter().enumerate().skip(scroll_start).take(visible_h) {
                 let sel = i == clamped;
                 let bg = if sel { theme.cursor_bg } else { Color::Reset };
                 let lead = if sel { "▸ " } else { "  " };
@@ -522,8 +517,14 @@ pub fn render_modal(
                     "Ctrl+w + h/j/k/l",
                     "Focus split panes (Ctrl+w j focuses Now Playing controls/seekbar)",
                 ),
-                ("Mouse", "Click/drag progress bar, volume, buttons, tabs · Right-click menu"),
-                ("h j k l / Arrows", "Move cursor (or scrub seekbar/controls when bar focused)"),
+                (
+                    "Mouse",
+                    "Click/drag progress bar, volume, buttons, tabs · Right-click menu",
+                ),
+                (
+                    "h j k l / Arrows",
+                    "Move cursor (or scrub seekbar/controls when bar focused)",
+                ),
                 ("gg / G", "Jump to top / bottom"),
                 ("Ctrl+d / Ctrl+u", "Half-page scroll down / up"),
                 (
@@ -534,7 +535,10 @@ pub fn render_modal(
                     "gA / gL",
                     "Always jump to currently playing track's Artist / Album",
                 ),
-                ("e / Right-click", "Open context action menu for selected item"),
+                (
+                    "e / Right-click",
+                    "Open context action menu for selected item",
+                ),
                 ("gr / g/", "Refresh Discover feed / Global search"),
                 ("L (Shift+L)", "Toggle expanded Lyrics globally"),
                 ("zz / 0", "Recenter Lyrics on active line"),
@@ -567,7 +571,10 @@ pub fn render_modal(
                     "J / K (Shift)",
                     "Reorder track down / up (Queue & User Playlists)",
                 ),
-                ("u / D / C / X", "Undo queue / Deduplicate / Clear upcoming / Clear all"),
+                (
+                    "u / D / C / X",
+                    "Undo queue / Deduplicate / Clear upcoming / Clear all",
+                ),
                 (
                     "R / I / E / U",
                     "Playlists: Rename / Import URL / Export JSON+M3U8 / Upload to YTM",
@@ -610,7 +617,11 @@ fn field_line<'a>(label: &'a str, val: &str, focused: bool, mask: bool) -> Line<
         val.to_string()
     };
     let cursor = if focused { "█" } else { "" };
-    let bg = if focused { theme.cursor_bg } else { Color::Reset };
+    let bg = if focused {
+        theme.cursor_bg
+    } else {
+        Color::Reset
+    };
     Line::from(vec![
         Span::styled(label, Style::default().fg(DIM).bg(Color::Reset)),
         Span::styled(

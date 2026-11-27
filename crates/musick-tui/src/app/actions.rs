@@ -6,9 +6,7 @@ use crate::keymap::{Action, InputMode};
 use crate::views::{
     ArtistTab, LibraryTab, PlayerFocusPane, PlayerPanelMode, PlaylistsPane, ViewEffect,
 };
-use crate::widgets::{
-    ActiveModal, ContextMenuAction, ContextMenuItem, PlayerBarControl, RootTab,
-};
+use crate::widgets::{ActiveModal, ContextMenuAction, ContextMenuItem, PlayerBarControl, RootTab};
 
 use super::{App, MAX_NAV_DEPTH, NavPage};
 
@@ -314,7 +312,10 @@ impl App {
                 RootTab::Player => self.player.hovered_item(),
                 RootTab::Playlists => self.playlists.hovered_track().map(SearchItem::Track),
                 RootTab::Library => self.library.hovered_item(),
-                RootTab::Queue => self.queue.hovered_track(&self.queue_snap).map(SearchItem::Track),
+                RootTab::Queue => self
+                    .queue
+                    .hovered_track(&self.queue_snap)
+                    .map(SearchItem::Track),
                 RootTab::Settings => None,
             }
         }

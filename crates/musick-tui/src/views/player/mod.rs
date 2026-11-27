@@ -202,7 +202,9 @@ impl PlayerView {
                     .get(self.mixes_cursor)
                     .cloned()
                     .map(SearchItem::Track),
-                DiscoverTab::NewReleases => self.feed.new_releases.get(self.new_rel_cursor).cloned(),
+                DiscoverTab::NewReleases => {
+                    self.feed.new_releases.get(self.new_rel_cursor).cloned()
+                }
                 DiscoverTab::Featured => self.featured_items.get(self.featured_cursor).cloned(),
             },
             PlayerPanelMode::SearchResults => self.search_results.get(self.results_cursor).cloned(),

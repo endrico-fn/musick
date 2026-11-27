@@ -418,16 +418,15 @@ impl PlaylistsView {
         let selected_entry = visible
             .get(self.track_cursor)
             .map(|&(orig_idx, t)| (orig_idx, t.clone()));
-        let visible_owned: Option<Vec<Track>> =
-            if matches!(
-                action,
-                Action::Activate | Action::PlayDirect | Action::ArtistShuffle
-            ) && len > 0
-            {
-                Some(visible.iter().map(|(_, t)| (*t).clone()).collect())
-            } else {
-                None
-            };
+        let visible_owned: Option<Vec<Track>> = if matches!(
+            action,
+            Action::Activate | Action::PlayDirect | Action::ArtistShuffle
+        ) && len > 0
+        {
+            Some(visible.iter().map(|(_, t)| (*t).clone()).collect())
+        } else {
+            None
+        };
         drop(visible);
 
         match action {

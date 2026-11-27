@@ -226,13 +226,11 @@ pub fn accent_bold_style() -> Style {
 
 pub fn cursor_style(focused: bool) -> Style {
     let theme = active_theme();
-    Style::default()
-        .fg(TEXT)
-        .bg(if focused {
-            theme.cursor_bg
-        } else {
-            theme.cursor_blur_bg
-        })
+    Style::default().fg(TEXT).bg(if focused {
+        theme.cursor_bg
+    } else {
+        theme.cursor_blur_bg
+    })
 }
 
 pub fn panel_block<'a>(title: &'a str, subtitle: Option<&'a str>, focused: bool) -> Block<'a> {

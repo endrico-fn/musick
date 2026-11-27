@@ -286,7 +286,8 @@ impl App {
                 RootTab::Player => match self.player.mode {
                     PlayerPanelMode::Discover => match self.player.discover_tab {
                         DiscoverTab::Mixes => {
-                            let (s, e) = window(self.player.mixes_cursor, self.player.feed.mixes.len());
+                            let (s, e) =
+                                window(self.player.mixes_cursor, self.player.feed.mixes.len());
                             for tr in &self.player.feed.mixes[s..e] {
                                 if let Some(u) = tr.cover_url() {
                                     urls.push(u);

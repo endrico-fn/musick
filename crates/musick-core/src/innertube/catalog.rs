@@ -113,9 +113,7 @@ impl InnerTubeClient {
         force_refresh: bool,
     ) -> CoreResult<DiscoverFeed> {
         let cache_key = format!("discover:{region}:{}", self.auth.account_key());
-        if !force_refresh
-            && let Some(cached) = self.cache.get_catalog::<DiscoverFeed>(&cache_key)
-        {
+        if !force_refresh && let Some(cached) = self.cache.get_catalog::<DiscoverFeed>(&cache_key) {
             return Ok(cached);
         }
 
@@ -188,10 +186,7 @@ impl InnerTubeClient {
         let explore_v = explore_res.ok();
         let charts_v = charts_res.ok();
 
-        if home_pages.is_empty()
-            && new_rel_v.is_none()
-            && explore_v.is_none()
-            && charts_v.is_none()
+        if home_pages.is_empty() && new_rel_v.is_none() && explore_v.is_none() && charts_v.is_none()
         {
             return Err(CoreError::Catalog(
                 "Unable to load YouTube Music home/explore feeds".into(),
@@ -249,7 +244,11 @@ impl InnerTubeClient {
             }
         }
 
-        let ttl = if feed.mixes.is_empty() { Some(60) } else { None };
+        let ttl = if feed.mixes.is_empty() {
+            Some(60)
+        } else {
+            None
+        };
         self.cache.put_catalog(&cache_key, &feed, ttl);
         Ok(feed)
     }

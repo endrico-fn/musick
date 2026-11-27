@@ -8,9 +8,7 @@ use crate::theme::{
     BORDER, accent_bold_style, base_style, dim_style, icons_for, set_active_accent,
 };
 use crate::views::RenderCtx;
-use crate::widgets::{
-    NowPlayingBar, RootTab, TopBar, compute_topbar_tab_hitboxes, render_modal,
-};
+use crate::widgets::{NowPlayingBar, RootTab, TopBar, compute_topbar_tab_hitboxes, render_modal};
 
 use super::{App, NavPage};
 
