@@ -149,7 +149,6 @@ pub fn parse_duration_str(raw: &str) -> Option<u32> {
     }
 }
 
-/// Recursively collect all values stored under `target_key` in DFS order.
 pub fn find_all_by_key<'a>(root: &'a Value, target_key: &str, out: &mut Vec<&'a Value>) {
     match root {
         Value::Object(map) => {

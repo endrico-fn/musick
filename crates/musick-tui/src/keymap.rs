@@ -17,13 +17,14 @@ enum PendingChord {
     G(Instant),
     D(Instant),
     Y(Instant),
+    Z(Instant),
     CtrlW(Instant),
 }
 
 impl PendingChord {
     fn started_at(self) -> Instant {
         match self {
-            Self::G(t) | Self::D(t) | Self::Y(t) | Self::CtrlW(t) => t,
+            Self::G(t) | Self::D(t) | Self::Y(t) | Self::Z(t) | Self::CtrlW(t) => t,
         }
     }
 }
@@ -43,22 +44,36 @@ pub enum Action {
 
     // Global Playback & Lyrics & Sync
     ToggleLyrics,
+    CenterLyrics,
+    LyricsOffsetEarlier,
+    LyricsOffsetLater,
     SyncNow,
     ToggleTranslation,
     TogglePause,
+    ToggleMute,
     NextTrack,
     PrevTrack,
     SeekForward,
     SeekBackward,
+    SeekForwardFast,
+    SeekBackwardFast,
     VolumeUp,
     VolumeDown,
     ToggleShuffle,
     CycleRepeat,
     StartSearch,
+    GlobalSearch,
+    RefreshDiscover,
     GoBack,
     Escape,
     ToggleHelp,
     Quit,
+
+    // Cross-Entity Jumps
+    GoArtist,
+    GoAlbum,
+    GoPlayingArtist,
+    GoPlayingAlbum,
 
     // Navigation
     MoveLeft,
@@ -78,10 +93,12 @@ pub enum Action {
     AddToPlaylist,
     ToggleLike,
     ToggleSave,
+    ToggleArtistFollow,
+    ShowArtistBio,
+    ArtistShuffle,
     StartRadio,
     CycleSort,
-    ToggleGridList,
-    CycleCoverSize,
+    CreatePlaylist,
     DeleteItem,
     MoveItemDown,
     MoveItemUp,
@@ -95,10 +112,16 @@ pub enum Action {
     ExportPlaylist,
     UploadPlaylist,
     CopyUrl,
+    CopyCollectionUrl,
 
     // Text Input (Insert / Modal modes)
     InputChar(char),
     InputBackspace,
+    InputDelete,
+    InputHome,
+    InputEnd,
+    InputClearLine,
+    InputDeleteWord,
     InputSubmit,
     InputTab,
     InputBackTab,
@@ -124,6 +147,7 @@ impl KeymapEngine {
             Some(PendingChord::G(_)) => Some("g"),
             Some(PendingChord::D(_)) => Some("d"),
             Some(PendingChord::Y(_)) => Some("y"),
+            Some(PendingChord::Z(_)) => Some("z"),
             Some(PendingChord::CtrlW(_)) => Some("C-w"),
             None => None,
         }
@@ -143,20 +167,18 @@ impl KeymapEngine {
         key: KeyEvent,
         now: Instant,
     ) -> Option<Action> {
-        // Expire stale chords cleanly after 600ms
         if let Some(chord) = self.pending
             && now.saturating_duration_since(chord.started_at()) >= CHORD_TIMEOUT
         {
             self.pending = None;
         }
 
-        // Ctrl+C always cleanly quits
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.pending = None;
             return Some(Action::Quit);
         }
 
-        // Strict Insert / Modal isolation (Review Focus #3)
+        // isolate insert and modal inputs from global bindings
         if matches!(mode, InputMode::Insert | InputMode::Modal) {
             self.pending = None;
             return self.handle_text_mode(key);
@@ -166,25 +188,34 @@ impl KeymapEngine {
     }
 
     fn handle_text_mode(&self, key: KeyEvent) -> Option<Action> {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            return match key.code {
+                KeyCode::Char('u') => Some(Action::InputClearLine),
+                KeyCode::Char('w') => Some(Action::InputDeleteWord),
+                KeyCode::Char('a') => Some(Action::InputHome),
+                KeyCode::Char('e') => Some(Action::InputEnd),
+                _ => None,
+            };
+        }
         match key.code {
             KeyCode::Esc => Some(Action::InputCancel),
             KeyCode::Enter => Some(Action::InputSubmit),
             KeyCode::Backspace => Some(Action::InputBackspace),
+            KeyCode::Delete => Some(Action::InputDelete),
+            KeyCode::Home => Some(Action::InputHome),
+            KeyCode::End => Some(Action::InputEnd),
             KeyCode::Tab => Some(Action::InputTab),
             KeyCode::BackTab => Some(Action::InputBackTab),
             KeyCode::Up => Some(Action::InputUp),
             KeyCode::Down => Some(Action::InputDown),
             KeyCode::Left => Some(Action::InputLeft),
             KeyCode::Right => Some(Action::InputRight),
-            KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(Action::InputChar(ch))
-            }
+            KeyCode::Char(ch) => Some(Action::InputChar(ch)),
             _ => None,
         }
     }
 
     fn handle_normal_mode(&mut self, key: KeyEvent, now: Instant) -> Option<Action> {
-        // 1. Check active chord prefix first
         if let Some(chord) = self.pending.take() {
             match (chord, key.code, key.modifiers) {
                 (PendingChord::G(_), KeyCode::Char('g'), m)
@@ -202,6 +233,36 @@ impl KeymapEngine {
                 {
                     return Some(Action::PrevTab);
                 }
+                (PendingChord::G(_), KeyCode::Char('a'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
+                    return Some(Action::GoArtist);
+                }
+                (PendingChord::G(_), KeyCode::Char('l'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
+                    return Some(Action::GoAlbum);
+                }
+                (PendingChord::G(_), KeyCode::Char('A'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
+                    return Some(Action::GoPlayingArtist);
+                }
+                (PendingChord::G(_), KeyCode::Char('L'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
+                    return Some(Action::GoPlayingAlbum);
+                }
+                (PendingChord::G(_), KeyCode::Char('r'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
+                    return Some(Action::RefreshDiscover);
+                }
+                (PendingChord::G(_), KeyCode::Char('/'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
+                    return Some(Action::GlobalSearch);
+                }
                 (PendingChord::D(_), KeyCode::Char('d'), m)
                     if !m.contains(KeyModifiers::CONTROL) =>
                 {
@@ -211,6 +272,11 @@ impl KeymapEngine {
                     if !m.contains(KeyModifiers::CONTROL) =>
                 {
                     return Some(Action::CopyUrl);
+                }
+                (PendingChord::Z(_), KeyCode::Char('z'), m)
+                    if !m.contains(KeyModifiers::CONTROL) =>
+                {
+                    return Some(Action::CenterLyrics);
                 }
                 (PendingChord::CtrlW(_), KeyCode::Char('h') | KeyCode::Left, _) => {
                     return Some(Action::FocusPaneLeft);
@@ -225,16 +291,14 @@ impl KeymapEngine {
                     return Some(Action::FocusPaneRight);
                 }
                 (_, KeyCode::Esc, _) => {
-                    // Esc cancels chord cleanly
                     return None;
                 }
                 _ => {
-                    // Invalid second key: reset chord AND fall through to dispatch the key!
+                    // invalid second key resets chord and falls through
                 }
             }
         }
 
-        // 2. Ctrl-modified bindings
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             return match key.code {
                 KeyCode::Char('w') => {
@@ -247,7 +311,6 @@ impl KeymapEngine {
             };
         }
 
-        // 3. Single-key bindings and chord starters
         match key.code {
             KeyCode::Char('g') => {
                 self.pending = Some(PendingChord::G(now));
@@ -261,27 +324,37 @@ impl KeymapEngine {
                 self.pending = Some(PendingChord::Y(now));
                 None
             }
+            KeyCode::Char('z') => {
+                self.pending = Some(PendingChord::Z(now));
+                None
+            }
 
-            // Root tabs 1..5
+            // root tabs 1..5
             KeyCode::Char('1') => Some(Action::SwitchTab(0)),
             KeyCode::Char('2') => Some(Action::SwitchTab(1)),
             KeyCode::Char('3') => Some(Action::SwitchTab(2)),
             KeyCode::Char('4') => Some(Action::SwitchTab(3)),
             KeyCode::Char('5') => Some(Action::SwitchTab(4)),
+            KeyCode::Char('0') => Some(Action::CenterLyrics),
 
-            // Sub-tabs
+            // sub-tabs
             KeyCode::Tab => Some(Action::NextSubTab),
             KeyCode::BackTab => Some(Action::PrevSubTab),
 
-            // Global actions (strictly collision-free!)
+            // global playback, lyrics, and sync
             KeyCode::Char('L') => Some(Action::ToggleLyrics),
             KeyCode::Char('S') => Some(Action::SyncNow),
             KeyCode::Char('t') => Some(Action::ToggleTranslation),
+            KeyCode::Char(',') => Some(Action::LyricsOffsetEarlier),
+            KeyCode::Char('.') => Some(Action::LyricsOffsetLater),
             KeyCode::Char(' ') => Some(Action::TogglePause),
+            KeyCode::Char('M') => Some(Action::ToggleMute),
             KeyCode::Char('n') => Some(Action::NextTrack),
             KeyCode::Char('b') => Some(Action::PrevTrack),
             KeyCode::Char('>' | ']') => Some(Action::SeekForward),
             KeyCode::Char('<' | '[') => Some(Action::SeekBackward),
+            KeyCode::Char('}') => Some(Action::SeekForwardFast),
+            KeyCode::Char('{') => Some(Action::SeekBackwardFast),
             KeyCode::Char('+' | '=') => Some(Action::VolumeUp),
             KeyCode::Char('-') => Some(Action::VolumeDown),
             KeyCode::Char('s') => Some(Action::ToggleShuffle),
@@ -292,7 +365,7 @@ impl KeymapEngine {
             KeyCode::Char('?') => Some(Action::ToggleHelp),
             KeyCode::Char('q') => Some(Action::Quit),
 
-            // Vim & Arrow Navigation
+            // navigation
             KeyCode::Char('h') | KeyCode::Left => Some(Action::MoveLeft),
             KeyCode::Char('j') | KeyCode::Down => Some(Action::MoveDown),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::MoveUp),
@@ -301,7 +374,7 @@ impl KeymapEngine {
             KeyCode::PageDown => Some(Action::HalfPageDown),
             KeyCode::PageUp => Some(Action::HalfPageUp),
 
-            // Item Actions
+            // item actions
             KeyCode::Enter => Some(Action::Activate),
             KeyCode::Char('p') => Some(Action::PlayDirect),
             KeyCode::Char('N') => Some(Action::PlayNext),
@@ -309,12 +382,14 @@ impl KeymapEngine {
             KeyCode::Char('P') => Some(Action::AddToPlaylist),
             KeyCode::Char('f') => Some(Action::ToggleLike),
             KeyCode::Char('w') => Some(Action::ToggleSave),
+            KeyCode::Char('W') => Some(Action::ToggleArtistFollow),
+            KeyCode::Char('i') => Some(Action::ShowArtistBio),
+            KeyCode::Char('x') => Some(Action::ArtistShuffle),
             KeyCode::Char('r') => Some(Action::StartRadio),
             KeyCode::Char('o') => Some(Action::CycleSort),
-            KeyCode::Char('v') => Some(Action::ToggleGridList),
-            KeyCode::Char('c') => Some(Action::CycleCoverSize),
+            KeyCode::Char('c') => Some(Action::CreatePlaylist),
 
-            // Edit Actions
+            // edit actions
             KeyCode::Delete => Some(Action::DeleteItem),
             KeyCode::Char('J') => Some(Action::MoveItemDown),
             KeyCode::Char('K') => Some(Action::MoveItemUp),
@@ -322,11 +397,12 @@ impl KeymapEngine {
             KeyCode::Char('D') => Some(Action::Deduplicate),
             KeyCode::Char('C') => Some(Action::ClearUpcoming),
 
-            // Playlist Management
+            // playlist management & copy
             KeyCode::Char('R') => Some(Action::RenamePlaylist),
             KeyCode::Char('I') => Some(Action::ImportPlaylist),
             KeyCode::Char('E') => Some(Action::ExportPlaylist),
             KeyCode::Char('U') => Some(Action::UploadPlaylist),
+            KeyCode::Char('Y') => Some(Action::CopyCollectionUrl),
 
             _ => None,
         }

@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.asset }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: musick-linux-x86_64
+            flags: "--no-default-features"
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset: musick-fast-linux-x86_64
+            flags: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: musick-linux-aarch64
+            flags: "--no-default-features"
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: musick-fast-linux-aarch64
+            flags: ""
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.asset }}
+
+      - name: Build release binary
+        run: cargo build --release --locked -p musick-tui ${{ matrix.flags }}
+
+      - name: CLI smoke check
+        run: |
+          TMP_XDG="$(mktemp -d)"
+          trap 'rm -rf "$TMP_XDG"' EXIT
+          export XDG_CONFIG_HOME="$TMP_XDG/config"
+          export XDG_DATA_HOME="$TMP_XDG/data"
+          export XDG_CACHE_HOME="$TMP_XDG/cache"
+          export XDG_RUNTIME_DIR="$TMP_XDG/run"
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+
+          ./target/release/musick --help
+          ./target/release/musick doctor --offline
+          ./target/release/musick auth status | grep -q "Auth mode:   anonymous"
+
+      - name: Package tarball
+        run: |
+          mkdir -p dist
+          tar -czf "dist/${{ matrix.asset }}.tar.gz" -C target/release musick
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}.tar.gz
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate and verify SHA256SUMS.txt
+        working-directory: dist
+        run: |
+          sha256sum musick-*.tar.gz > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/musick-*.tar.gz
+            dist/SHA256SUMS.txt

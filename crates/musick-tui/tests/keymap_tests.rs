@@ -19,7 +19,7 @@ fn collision_free_vim_keys_and_chords_work_cleanly() {
     let mut km = KeymapEngine::new();
     let t0 = Instant::now();
 
-    // L = ToggleLyrics, l = MoveRight, S = SyncNow, c = CycleCoverSize
+    // L = ToggleLyrics, l = MoveRight, S = SyncNow, c = CreatePlaylist, v = unbound (no CoverGrid)
     assert_eq!(
         km.handle_key_at(InputMode::Normal, key(KeyCode::Char('L')), t0),
         Some(Action::ToggleLyrics)
@@ -34,7 +34,51 @@ fn collision_free_vim_keys_and_chords_work_cleanly() {
     );
     assert_eq!(
         km.handle_key_at(InputMode::Normal, key(KeyCode::Char('c')), t0),
-        Some(Action::CycleCoverSize)
+        Some(Action::CreatePlaylist)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('v')), t0),
+        None
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('0')), t0),
+        Some(Action::CenterLyrics)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('M')), t0),
+        Some(Action::ToggleMute)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('}')), t0),
+        Some(Action::SeekForwardFast)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('{')), t0),
+        Some(Action::SeekBackwardFast)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('z')), t0),
+        None
+    );
+    assert_eq!(
+        km.handle_key_at(
+            InputMode::Normal,
+            key(KeyCode::Char('z')),
+            t0 + Duration::from_millis(50)
+        ),
+        Some(Action::CenterLyrics)
+    );
+    assert_eq!(
+        km.handle_key_at(InputMode::Normal, key(KeyCode::Char('g')), t0),
+        None
+    );
+    assert_eq!(
+        km.handle_key_at(
+            InputMode::Normal,
+            key(KeyCode::Char('r')),
+            t0 + Duration::from_millis(50)
+        ),
+        Some(Action::RefreshDiscover)
     );
 
     // Chords: gg, gt, gT, dd, yy, Ctrl+w h/j/k/l

@@ -60,7 +60,7 @@ impl Widget for NowPlayingBar<'_> {
         }
         let subtitle = self.subtitle_text();
         let block = panel_block(
-            "Player",
+            "Now Playing",
             if subtitle.is_empty() {
                 None
             } else {
@@ -188,12 +188,33 @@ impl Widget for NowPlayingBar<'_> {
             ];
 
             let vol = self.snapshot.volume.clamp(0, 130);
-            let filled = ((f64::from(vol) / 10.0).round() as usize).min(10);
+            let muted = self.snapshot.muted;
+            let filled = if muted {
+                0
+            } else {
+                ((f64::from(vol) / 10.0).round() as usize).min(10)
+            };
             let vol_bar = format!("{}{}", "█".repeat(filled), "░".repeat(10 - filled));
-            let vol_color = if vol > 100 { WARN_GOLD } else { ACCENT };
-            let vol_pct_color = if vol > 100 { WARN_GOLD } else { DIM };
+            let vol_color = if muted {
+                BORDER
+            } else if vol > 100 {
+                WARN_GOLD
+            } else {
+                ACCENT
+            };
+            let vol_pct_color = if muted {
+                DIM
+            } else if vol > 100 {
+                WARN_GOLD
+            } else {
+                DIM
+            };
             let vol_prefix = format!("{} ", self.icons.volume);
-            let vol_pct = format!("{vol:>4}%");
+            let vol_pct = if muted {
+                " MUTE".to_string()
+            } else {
+                format!("{vol:>4}%")
+            };
             let vol_total_w = cell_width(&vol_prefix) + 1 + 10 + 1 + cell_width(&vol_pct);
 
             if content_w > left_w + vol_total_w {
@@ -220,7 +241,11 @@ impl Widget for NowPlayingBar<'_> {
                     Style::default().fg(vol_pct_color).bg(Color::Reset),
                 ));
             } else {
-                let compact_vol = format!(" {vol}%");
+                let compact_vol = if muted {
+                    " MUTE".to_string()
+                } else {
+                    format!(" {vol}%")
+                };
                 left_w += cell_width(&compact_vol);
                 if content_w >= left_w {
                     spans.push(Span::styled(

@@ -1,26 +1,68 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 
 use image::imageops::{self, FilterType};
 use image::{DynamicImage, ImageBuffer, Rgba};
+use lru::LruCache;
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{Alignment, Rect, Size};
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::StatefulProtocol;
-use ratatui_image::{Resize, StatefulImage};
+use ratatui_image::{Resize, ResizeEncodeRender, StatefulImage};
 
 use musick_core::ImageProtocol;
 
 use crate::theme::{ACCENT, DIM};
 use crate::widgets::BrailleSpinner;
 
-const MAX_IMAGE_CACHE: usize = 128;
-const MAX_PROTO_CACHE: usize = 128;
+const MAX_IMAGE_CACHE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(127);
+const MAX_PROTO_CACHE: NonZeroUsize = NonZeroUsize::MIN.saturating_add(127);
+const WORKER_QUEUE_BOUND: usize = 64;
+
+static KITTY_GRAPHICS_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 type ProtoKey = (String, usize, u16, u16);
+
+struct EncodeReq {
+    key: ProtoKey,
+    gen_id: u64,
+    src: Arc<DynamicImage>,
+    picker: Picker,
+    pixel_proto: bool,
+    font_size: (u16, u16),
+    width: u16,
+    height: u16,
+    resize: Resize,
+}
+
+struct EncodeResp {
+    key: ProtoKey,
+    gen_id: u64,
+    proto: StatefulProtocol,
+}
+
+/// delete all kitty graphics placements from stdout if kitty graphics were rendered
+pub fn write_kitty_delete_all() {
+    if KITTY_GRAPHICS_ACTIVE.swap(false, Ordering::SeqCst) {
+        let mut stdout = std::io::stdout();
+        let _ = stdout.write_all(b"\x1b_Ga=d,d=A\x1b\\");
+        let _ = stdout.flush();
+    }
+}
+
+fn is_dumb_or_linux_tty() -> bool {
+    matches!(
+        std::env::var("TERM").ok().as_deref(),
+        Some("linux" | "dumb")
+    )
+}
 
 /// center-crop `src` to 1:1, scale cleanly to `min(canvas_w, canvas_h)`, and center on transparent rgba canvas
 pub fn center_square_canvas(src: &DynamicImage, canvas_w: u32, canvas_h: u32) -> DynamicImage {
@@ -48,22 +90,87 @@ pub fn center_square_canvas(src: &DynamicImage, canvas_w: u32, canvas_h: u32) ->
     canvas
 }
 
-/// manages terminal graphics protocol detection and bounded stateful image cache
+fn encode_protocol(
+    src: &DynamicImage,
+    picker: &Picker,
+    pixel_proto: bool,
+    font_size: (u16, u16),
+    width: u16,
+    height: u16,
+    resize: &Resize,
+) -> StatefulProtocol {
+    let prepared = if pixel_proto {
+        let (fw, fh) = font_size;
+        let cw = u32::from(width) * u32::from(fw.max(1));
+        let ch = u32::from(height) * u32::from(fh.max(1));
+        center_square_canvas(src, cw, ch)
+    } else {
+        src.clone()
+    };
+    let mut proto = picker.new_resize_protocol(prepared);
+    proto.resize_encode(resize, Size::new(width, height));
+    proto
+}
+
+fn spawn_encode_worker() -> (mpsc::SyncSender<EncodeReq>, mpsc::Receiver<EncodeResp>) {
+    let (req_tx, req_rx) = mpsc::sync_channel::<EncodeReq>(WORKER_QUEUE_BOUND);
+    let (resp_tx, resp_rx) = mpsc::channel::<EncodeResp>();
+    let _ = std::thread::Builder::new()
+        .name("musick-cover-enc".to_string())
+        .spawn(move || {
+            while let Ok(req) = req_rx.recv() {
+                let proto = encode_protocol(
+                    &req.src,
+                    &req.picker,
+                    req.pixel_proto,
+                    req.font_size,
+                    req.width,
+                    req.height,
+                    &req.resize,
+                );
+                if resp_tx
+                    .send(EncodeResp {
+                        key: req.key,
+                        gen_id: req.gen_id,
+                        proto,
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+    (req_tx, resp_rx)
+}
+
+/// manages terminal graphics protocol detection, bounded lru image caches, and off-thread encoding
 pub struct CoverRenderer {
     picker: Picker,
     detected_protocol: ProtocolType,
+    probed: bool,
     enabled: bool,
+    modal_open: bool,
     font_size: (u16, u16),
-    images: HashMap<String, Arc<DynamicImage>>,
-    image_order: VecDeque<String>,
-    protocols: HashMap<ProtoKey, StatefulProtocol>,
-    proto_order: VecDeque<ProtoKey>,
+    images: LruCache<String, Arc<DynamicImage>>,
+    protocols: LruCache<ProtoKey, StatefulProtocol>,
     frame_counts: HashMap<String, usize>,
+    in_flight: HashSet<ProtoKey>,
+    generation: u64,
+    enc_tx: Option<mpsc::SyncSender<EncodeReq>>,
+    enc_rx: Option<mpsc::Receiver<EncodeResp>>,
 }
 
 impl CoverRenderer {
     pub fn detect(pref: ImageProtocol) -> Self {
-        let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+        let skip_probe = matches!(pref, ImageProtocol::Off) || is_dumb_or_linux_tty();
+        let (mut picker, probed) = if skip_probe {
+            (Picker::halfblocks(), is_dumb_or_linux_tty())
+        } else {
+            (
+                Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks()),
+                true,
+            )
+        };
         let detected_protocol = picker.protocol_type();
         let fs = picker.font_size();
         let enabled = !matches!(pref, ImageProtocol::Off);
@@ -73,16 +180,21 @@ impl CoverRenderer {
             ImageProtocol::Sixel => picker.set_protocol_type(ProtocolType::Sixel),
             ImageProtocol::Halfblock => picker.set_protocol_type(ProtocolType::Halfblocks),
         }
+        let (tx, rx) = spawn_encode_worker();
         Self {
             picker,
             detected_protocol,
+            probed,
             enabled,
+            modal_open: false,
             font_size: (fs.width, fs.height),
-            images: HashMap::new(),
-            image_order: VecDeque::new(),
-            protocols: HashMap::new(),
-            proto_order: VecDeque::new(),
+            images: LruCache::new(MAX_IMAGE_CACHE),
+            protocols: LruCache::new(MAX_PROTO_CACHE),
             frame_counts: HashMap::new(),
+            in_flight: HashSet::new(),
+            generation: 1,
+            enc_tx: Some(tx),
+            enc_rx: Some(rx),
         }
     }
 
@@ -95,13 +207,17 @@ impl CoverRenderer {
         Self {
             picker,
             detected_protocol: ProtocolType::Halfblocks,
+            probed: true,
             enabled: true,
+            modal_open: false,
             font_size,
-            images: HashMap::new(),
-            image_order: VecDeque::new(),
-            protocols: HashMap::new(),
-            proto_order: VecDeque::new(),
+            images: LruCache::new(MAX_IMAGE_CACHE),
+            protocols: LruCache::new(MAX_PROTO_CACHE),
             frame_counts: HashMap::new(),
+            in_flight: HashSet::new(),
+            generation: 1,
+            enc_tx: None,
+            enc_rx: None,
         }
     }
 
@@ -109,8 +225,28 @@ impl CoverRenderer {
         self.enabled
     }
 
+    pub fn set_modal_open(&mut self, open: bool) {
+        self.modal_open = open;
+    }
+
+    pub fn has_pending_renders(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    pub fn purge_kitty_graphics(&mut self) {
+        write_kitty_delete_all();
+    }
+
     pub fn begin_frame(&mut self) {
         self.frame_counts.clear();
+        if let Some(ref rx) = self.enc_rx {
+            while let Ok(resp) = rx.try_recv() {
+                self.in_flight.remove(&resp.key);
+                if resp.gen_id == self.generation {
+                    self.protocols.put(resp.key, resp.proto);
+                }
+            }
+        }
     }
 
     /// terminal cell pixel aspect ratio (`font_height / font_width`), clamped to `1.5..=3.0`
@@ -141,6 +277,15 @@ impl CoverRenderer {
 
     pub fn set_protocol(&mut self, pref: ImageProtocol) -> bool {
         let next_enabled = !matches!(pref, ImageProtocol::Off);
+        if next_enabled && !self.probed && !is_dumb_or_linux_tty() {
+            if let Ok(queried) = Picker::from_query_stdio() {
+                let fs = queried.font_size();
+                self.detected_protocol = queried.protocol_type();
+                self.font_size = (fs.width, fs.height);
+                self.picker = queried;
+            }
+            self.probed = true;
+        }
         let proto = match pref {
             ImageProtocol::Auto | ImageProtocol::Off => self.detected_protocol,
             ImageProtocol::Kitty => ProtocolType::Kitty,
@@ -153,43 +298,47 @@ impl CoverRenderer {
             self.picker.set_protocol_type(proto);
         }
         if changed {
+            self.generation = self.generation.wrapping_add(1);
             self.protocols.clear();
-            self.proto_order.clear();
+            self.in_flight.clear();
+            self.purge_kitty_graphics();
         }
         changed
     }
 
     pub fn clear_cache(&mut self) {
+        self.generation = self.generation.wrapping_add(1);
         self.images.clear();
-        self.image_order.clear();
         self.protocols.clear();
-        self.proto_order.clear();
+        self.in_flight.clear();
         self.frame_counts.clear();
+        self.purge_kitty_graphics();
     }
 
     pub fn insert_image(&mut self, url: String, img: Arc<DynamicImage>) {
-        self.images.insert(url.clone(), img);
-        self.image_order.retain(|k| k != &url);
-        self.image_order.push_back(url.clone());
-        while self.images.len() > MAX_IMAGE_CACHE {
-            if let Some(oldest) = self.image_order.pop_front() {
-                self.images.remove(&oldest);
-                self.protocols.retain(|(u, ..), _| u != &oldest);
-                self.proto_order.retain(|(u, ..)| u != &oldest);
-            } else {
-                break;
-            }
+        self.images.put(url.clone(), img);
+        // drop cached protocols for updated url
+        let stale_keys: Vec<ProtoKey> = self
+            .protocols
+            .iter()
+            .filter_map(|(k, _)| if k.0 == url { Some(k.clone()) } else { None })
+            .collect();
+        for k in stale_keys {
+            self.protocols.pop(&k);
         }
-        self.protocols.retain(|(u, ..), _| u != &url);
-        self.proto_order.retain(|(u, ..)| u != &url);
+        self.in_flight.retain(|k| k.0 != url);
     }
 
     pub fn has_image(&self, url: &str) -> bool {
-        self.images.contains_key(url)
+        self.images.contains(url)
     }
 
     fn uses_pixel_protocol(&self) -> bool {
         !matches!(self.picker.protocol_type(), ProtocolType::Halfblocks)
+    }
+
+    fn sixel_blocked_by_modal(&self) -> bool {
+        self.modal_open && self.picker.protocol_type() == ProtocolType::Sixel
     }
 
     fn protocol_for_frame(
@@ -197,8 +346,9 @@ impl CoverRenderer {
         url: &str,
         width: u16,
         height: u16,
+        resize: &Resize,
     ) -> Option<&mut StatefulProtocol> {
-        if !self.enabled || !self.images.contains_key(url) {
+        if !self.enabled || self.sixel_blocked_by_modal() || !self.images.contains(url) {
             return None;
         }
         let occ = {
@@ -208,29 +358,43 @@ impl CoverRenderer {
             cur
         };
         let key: ProtoKey = (url.to_string(), occ, width, height);
-        if !self.protocols.contains_key(&key) {
-            let src = self.images.get(url)?;
-            let prepared = if self.uses_pixel_protocol() {
-                let (fw, fh) = self.font_size;
-                let cw = u32::from(width) * u32::from(fw.max(1));
-                let ch = u32::from(height) * u32::from(fh.max(1));
-                center_square_canvas(src, cw, ch)
-            } else {
-                (**src).clone()
-            };
-            let proto = self.picker.new_resize_protocol(prepared);
-            self.protocols.insert(key.clone(), proto);
-            self.proto_order.push_back(key.clone());
-            while self.protocols.len() > MAX_PROTO_CACHE {
-                if let Some(oldest) = self.proto_order.pop_front() {
-                    if oldest != key {
-                        self.protocols.remove(&oldest);
-                    }
-                } else {
-                    break;
+        if self.protocols.contains(&key) {
+            return self.protocols.get_mut(&key);
+        }
+
+        let src = self.images.get(url).cloned()?;
+        let pixel_proto = self.uses_pixel_protocol();
+        if let Some(ref tx) = self.enc_tx {
+            if self.in_flight.insert(key.clone()) {
+                let req = EncodeReq {
+                    key: key.clone(),
+                    gen_id: self.generation,
+                    src,
+                    picker: self.picker.clone(),
+                    pixel_proto,
+                    font_size: self.font_size,
+                    width,
+                    height,
+                    resize: resize.clone(),
+                };
+                if tx.try_send(req).is_err() {
+                    self.in_flight.remove(&key);
                 }
             }
+            return None;
         }
+
+        // synchronous path for deterministic headless unit tests
+        let proto = encode_protocol(
+            &src,
+            &self.picker,
+            pixel_proto,
+            self.font_size,
+            width,
+            height,
+            resize,
+        );
+        self.protocols.put(key.clone(), proto);
         self.protocols.get_mut(&key)
     }
 
@@ -284,22 +448,28 @@ impl CoverRenderer {
             return;
         }
 
+        let resize = if pixel_proto {
+            Resize::Fit(Some(FilterType::Triangle))
+        } else {
+            Resize::Scale(Some(FilterType::Triangle))
+        };
+        let is_kitty = self.picker.protocol_type() == ProtocolType::Kitty;
         if self.enabled
+            && !self.sixel_blocked_by_modal()
             && let Some(u) = url
-            && let Some(proto) = self.protocol_for_frame(u, target.width, target.height)
+            && let Some(proto) = self.protocol_for_frame(u, target.width, target.height, &resize)
         {
-            let resize = if pixel_proto {
-                Resize::Fit(Some(FilterType::Triangle))
-            } else {
-                Resize::Scale(Some(FilterType::Triangle))
-            };
+            if is_kitty {
+                KITTY_GRAPHICS_ACTIVE.store(true, Ordering::Relaxed);
+            }
             let widget = StatefulImage::default().resize(resize);
             frame.render_stateful_widget(widget, target, proto);
             return;
         }
 
         let mid_y = area.y + area.height / 2;
-        let label = if self.enabled && loading {
+        let encoding = url.is_some_and(|u| self.has_image(u) && !self.sixel_blocked_by_modal());
+        let label = if self.enabled && (loading || encoding) {
             Line::from(format!("{} loading", spinner.frame()))
                 .style(Style::default().fg(ACCENT).bg(Color::Reset))
         } else {
@@ -329,11 +499,17 @@ impl CoverRenderer {
         if area.width < 2 || area.height == 0 {
             return;
         }
+        let resize = Resize::Fit(Some(FilterType::Triangle));
+        let is_kitty = self.picker.protocol_type() == ProtocolType::Kitty;
         if self.enabled
+            && !self.sixel_blocked_by_modal()
             && let Some(u) = url
-            && let Some(proto) = self.protocol_for_frame(u, area.width, area.height)
+            && let Some(proto) = self.protocol_for_frame(u, area.width, area.height, &resize)
         {
-            let widget = StatefulImage::default().resize(Resize::Fit(Some(FilterType::Triangle)));
+            if is_kitty {
+                KITTY_GRAPHICS_ACTIVE.store(true, Ordering::Relaxed);
+            }
+            let widget = StatefulImage::default().resize(resize);
             frame.render_stateful_widget(widget, area, proto);
             return;
         }

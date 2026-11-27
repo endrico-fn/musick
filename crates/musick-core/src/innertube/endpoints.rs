@@ -186,6 +186,6 @@ impl PlaylistEditAction {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaylistEditResult {
-    /// Pairs of `(video_id, set_video_id)` returned by InnerTube on `ACTION_ADD_VIDEO`.
+    /// `(video_id, set_video_id)` pairs returned by innertube on `ACTION_ADD_VIDEO`
     pub added_set_video_ids: Vec<(String, String)>,
 }

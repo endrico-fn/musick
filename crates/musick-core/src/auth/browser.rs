@@ -5,6 +5,100 @@ use sha1::{Digest, Sha1};
 use crate::error::{CoreError, CoreResult};
 
 pub const YTM_ORIGIN: &str = "https://music.youtube.com";
+const ALLOWED_ORIGINS: &[&str] = &[
+    "https://music.youtube.com",
+    "https://www.youtube.com",
+    "https://youtube.com",
+];
+
+fn sanitize_origin(candidate: &str) -> String {
+    let trimmed = candidate.trim().trim_end_matches('/');
+    if ALLOWED_ORIGINS
+        .iter()
+        .any(|allowed| trimmed.eq_ignore_ascii_case(allowed))
+    {
+        trimmed.to_ascii_lowercase()
+    } else {
+        YTM_ORIGIN.to_string()
+    }
+}
+
+fn split_shell_tokens(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+    for ch in input.chars() {
+        if escaped {
+            cur.push(ch);
+            escaped = false;
+            continue;
+        }
+        if in_single {
+            if ch == '\'' {
+                in_single = false;
+            } else {
+                cur.push(ch);
+            }
+            continue;
+        }
+        if in_double {
+            if ch == '"' {
+                in_double = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else {
+                cur.push(ch);
+            }
+            continue;
+        }
+        match ch {
+            '\'' => in_single = true,
+            '"' => in_double = true,
+            '\\' => escaped = true,
+            c if c.is_whitespace() => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(ch),
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+fn apply_header_pair(
+    raw_pair: &str,
+    cookie: &mut Option<String>,
+    auth_user: &mut String,
+    page_id: &mut Option<String>,
+    origin: &mut String,
+) {
+    let pair = raw_pair.trim();
+    if pair.starts_with(':') {
+        // http/2 pseudo-header like `:authority:`
+        return;
+    }
+    let Some((name, value)) = pair.split_once(':') else {
+        return;
+    };
+    let header_name = name.trim().to_ascii_lowercase();
+    let header_val = value.trim().trim_matches('\'').trim_matches('"').trim();
+    if header_val.is_empty() {
+        return;
+    }
+    match header_name.as_str() {
+        "cookie" => *cookie = Some(header_val.to_string()),
+        "x-goog-authuser" => *auth_user = header_val.to_string(),
+        "x-goog-pageid" => *page_id = Some(header_val.to_string()),
+        "x-origin" | "origin" => *origin = sanitize_origin(header_val),
+        _ => {}
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BrowserCredentials {
@@ -89,7 +183,7 @@ pub fn compute_sapisidhash(sapisid: &str, origin: &str, timestamp_secs: u64) -> 
     format!("SAPISIDHASH {timestamp_secs}_{digest}")
 }
 
-/// Parse pasted browser DevTools request headers, cURL `-H` snippet, or a plain cookie string.
+/// parse pasted browser devtools request headers, curl `-H`/`-b`/`--cookie` snippet, or a plain cookie string
 pub fn parse_browser_headers(raw: &str) -> CoreResult<BrowserCredentials> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -104,40 +198,51 @@ pub fn parse_browser_headers(raw: &str) -> CoreResult<BrowserCredentials> {
     let mut origin = default_origin();
 
     for raw_line in trimmed.lines() {
-        let mut line = raw_line.trim();
+        let line = raw_line.trim();
         if line.is_empty() {
             continue;
         }
-        // Strip cURL -H / --header wrapper if user copied a cURL command.
-        if let Some(rest) = line
-            .strip_prefix("-H ")
-            .or_else(|| line.strip_prefix("--header "))
-        {
-            line = rest.trim().trim_end_matches('\\').trim();
-            line = line.trim_matches('\'').trim_matches('"');
-        }
-        if line.starts_with(':') {
-            // HTTP/2 pseudo-header like `:authority:`
+        let is_curl_line = line.starts_with("curl ")
+            || line.starts_with("-H ")
+            || line.starts_with("--header ")
+            || line.starts_with("-b ")
+            || line.starts_with("--cookie ");
+        if is_curl_line {
+            let tokens = split_shell_tokens(line.trim_end_matches('\\').trim());
+            let mut i = 0;
+            while i < tokens.len() {
+                match tokens[i].as_str() {
+                    "-b" | "--cookie" => {
+                        if let Some(val) = tokens.get(i + 1)
+                            && !val.trim().is_empty()
+                        {
+                            cookie = Some(val.trim().to_string());
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    "-H" | "--header" => {
+                        if let Some(val) = tokens.get(i + 1) {
+                            apply_header_pair(
+                                val,
+                                &mut cookie,
+                                &mut auth_user,
+                                &mut page_id,
+                                &mut origin,
+                            );
+                            i += 2;
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
             continue;
         }
-        let Some((name, value)) = line.split_once(':') else {
-            continue;
-        };
-        let header_name = name.trim().to_ascii_lowercase();
-        let header_val = value.trim().trim_matches('\'').trim_matches('"').trim();
-        if header_val.is_empty() {
-            continue;
-        }
-        match header_name.as_str() {
-            "cookie" => cookie = Some(header_val.to_string()),
-            "x-goog-authuser" => auth_user = header_val.to_string(),
-            "x-goog-pageid" => page_id = Some(header_val.to_string()),
-            "x-origin" | "origin" => origin = header_val.to_string(),
-            _ => {}
-        }
+        apply_header_pair(line, &mut cookie, &mut auth_user, &mut page_id, &mut origin);
     }
 
-    // If user pasted a plain cookie string (`SAPISID=...; __Secure-3PAPISID=...`) directly.
     let final_cookie = match cookie {
         Some(c) => c,
         None => {

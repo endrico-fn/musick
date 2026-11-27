@@ -15,9 +15,9 @@ use musick_audio::{
 use musick_core::{
     Album, AlbumSummary, AppCommand, AppPaths, Artist, ArtistSummary, AudioQuality, AuthManager,
     CacheManager, CacheSettings, CatalogApi, CavaAudioSource, CavaSmoothing, CoreError, CoreResult,
-    HomeFeed, Lyrics, LyricsService, MemorySecretStore, PlaybackTelemetryEvent, PlaybackTracking,
-    Playlist, PlaylistEditAction, PlaylistEditResult, PlaylistSummary, RadioBatch, SearchCategory,
-    SearchItem, Settings, SongRating, Track, UserStore,
+    DiscoverFeed, Lyrics, LyricsService, MemorySecretStore, PlaybackTelemetryEvent,
+    PlaybackTracking, Playlist, PlaylistEditAction, PlaylistEditResult, PlaylistSummary,
+    RadioBatch, SearchCategory, SearchItem, Settings, SongRating, Track, UserStore,
 };
 
 struct MockAudioBackend {
@@ -129,8 +129,8 @@ struct MockEngineCatalog {
 
 #[async_trait]
 impl CatalogApi for MockEngineCatalog {
-    async fn home_feed(&self, _region: &str) -> CoreResult<HomeFeed> {
-        Ok(HomeFeed::default())
+    async fn discover_feed(&self, _region: &str) -> CoreResult<DiscoverFeed> {
+        Ok(DiscoverFeed::default())
     }
     async fn search(
         &self,
@@ -149,7 +149,7 @@ impl CatalogApi for MockEngineCatalog {
     async fn artist_releases(
         &self,
         _browse_id: &str,
-        _params: &str,
+        _params: Option<&str>,
         _kind: &str,
     ) -> CoreResult<Vec<AlbumSummary>> {
         Ok(Vec::new())

@@ -15,7 +15,6 @@ pub fn cell_width(text: &str) -> usize {
     UnicodeWidthStr::width(text)
 }
 
-/// Truncate text to at most `width` terminal display columns, appending `…` when clipped.
 pub fn trunc_cells(text: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
@@ -46,7 +45,6 @@ pub fn trunc_cells(text: &str, width: usize) -> String {
     out
 }
 
-/// Truncate and pad text to exactly `width` terminal display columns.
 pub fn align_cells(text: &str, width: usize, align: Align) -> String {
     let s = trunc_cells(text, width);
     let pad = width.saturating_sub(cell_width(&s));
@@ -56,7 +54,6 @@ pub fn align_cells(text: &str, width: usize, align: Align) -> String {
     }
 }
 
-/// Fit left and right labels into `total_w` columns (excluding `gutter`).
 pub fn split_row_cells(
     left: &str,
     right: &str,
@@ -102,7 +99,7 @@ fn hard_break_word(word: &str, max_w: usize) -> Vec<String> {
     chunks
 }
 
-/// Word-wrap text so every returned line fits within `width` display columns (CJK/emoji safe).
+/// word-wrap text so every line fits within `width` display columns (cjk/emoji safe)
 pub fn wrap_cells(text: &str, width: usize) -> Vec<String> {
     let max_w = width.max(4);
     if cell_width(text) <= max_w {

@@ -16,7 +16,6 @@ pub trait SecretStore: Send + Sync {
     fn delete(&self, key: &str) -> CoreResult<()>;
 }
 
-/// Thread-safe in-memory secret store for tests.
 #[derive(Debug, Default)]
 pub struct MemorySecretStore {
     data: RwLock<HashMap<String, String>>,
@@ -56,7 +55,7 @@ impl SecretStore for MemorySecretStore {
     }
 }
 
-/// OS Keyring store with atomic `0o600` JSON file fallback when Secret Service is unavailable.
+/// os keyring store with atomic `0o600` json file fallback when secret service is unavailable
 pub struct KeyringSecretStore {
     fallback_path: PathBuf,
     file_lock: Mutex<()>,

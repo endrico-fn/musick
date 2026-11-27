@@ -6,7 +6,6 @@ use crate::theme::{ACCENT, DIM};
 pub const BRAILLE_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 pub const BRAILLE_STATIC: &str = "⣿";
 
-/// Shared 80ms Braille dot loading indicator replacing all legacy skeleton placeholders.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BrailleSpinner {
     pub tick: u64,

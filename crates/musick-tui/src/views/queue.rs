@@ -1,16 +1,17 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use musick_core::{AppCommand, QueueSnapshot};
+use musick_core::{AppCommand, QueueSnapshot, Track};
 
 use crate::keymap::Action;
 use crate::text::Align;
 use crate::theme::panel_block;
 use crate::views::{RenderCtx, ViewEffect};
-use crate::widgets::{ColumnDef, TableRow, TrackTable};
+use crate::widgets::{ColumnDef, ScrollState, TableRow, TrackTable};
 
 pub struct QueueView {
     pub cursor: usize,
+    pub scroll: ScrollState,
 }
 
 impl Default for QueueView {
@@ -21,7 +22,14 @@ impl Default for QueueView {
 
 impl QueueView {
     pub fn new() -> Self {
-        Self { cursor: 0 }
+        Self {
+            cursor: 0,
+            scroll: ScrollState::new(),
+        }
+    }
+
+    pub fn hovered_track(&self, queue: &QueueSnapshot) -> Option<Track> {
+        queue.tracks.get(self.cursor).cloned()
     }
 
     pub fn footer_hints(&self) -> &'static [(&'static str, &'static str)] {
@@ -216,11 +224,12 @@ impl QueueView {
                 columns: &cols,
                 rows: &rows,
                 cursor: self.cursor,
+                scroll: Some(&self.scroll),
                 focused: true,
                 show_header: true,
                 loading: false,
                 loading_label: "",
-                empty_text: "Queue is empty — play a track from 1 Home or press / to search",
+                empty_text: "Queue is empty — play a track from 1 Player or press / to search",
                 icons: ctx.icons,
                 spinner: ctx.spinner,
             },

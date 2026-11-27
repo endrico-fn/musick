@@ -8,9 +8,12 @@ use musick_core::{AppCommand, Playlist, SavedCollectionKind, Track};
 
 use crate::keymap::Action;
 use crate::text::{Align, trunc_cells, wrap_cells};
-use crate::theme::{ACCENT, CURSOR_BG, DIM, TEXT, cover_panel_block, panel_block};
+use crate::theme::{ACCENT, DIM, TEXT, panel_block};
+use crate::views::detail_hero::{DetailCover, render_detail_cover, split_detail_hero};
 use crate::views::{RenderCtx, TrackSortMode, ViewEffect};
-use crate::widgets::{ColumnDef, CoverRenderer, TableRow, TrackTable};
+use crate::widgets::{
+    ColumnDef, CoverRenderer, ScrollState, TableRow, TextInput, TrackTable, render_filter_bar,
+};
 
 pub struct PlaylistDetailView {
     pub browse_id: String,
@@ -19,8 +22,9 @@ pub struct PlaylistDetailView {
     pub loading: bool,
     pub saved: bool,
     pub cursor: usize,
+    pub scroll: ScrollState,
     pub filter_active: bool,
-    pub filter_query: String,
+    pub filter: TextInput,
     pub sort_mode: TrackSortMode,
 }
 
@@ -33,8 +37,9 @@ impl PlaylistDetailView {
             loading: true,
             saved,
             cursor: 0,
+            scroll: ScrollState::new(),
             filter_active: false,
-            filter_query: String::new(),
+            filter: TextInput::new(),
             sort_mode: TrackSortMode::Original,
         }
     }
@@ -44,7 +49,7 @@ impl PlaylistDetailView {
     }
 
     pub fn has_filter(&self) -> bool {
-        !self.filter_query.is_empty()
+        !self.filter.is_empty()
     }
 
     pub fn set_playlist(&mut self, playlist: Playlist) {
@@ -52,47 +57,52 @@ impl PlaylistDetailView {
         self.playlist = Some(playlist);
         self.loading = false;
         self.cursor = 0;
+        self.scroll.reset();
     }
 
     pub fn visible_tracks(&self) -> Vec<(usize, &Track)> {
         let Some(ref pl) = self.playlist else {
             return Vec::new();
         };
-        self.sort_mode.apply(&pl.tracks, &self.filter_query)
+        self.sort_mode.apply(&pl.tracks, self.filter.as_str())
+    }
+
+    pub fn hovered_track(&self) -> Option<Track> {
+        self.visible_tracks()
+            .get(self.cursor)
+            .map(|(_, t)| (*t).clone())
     }
 
     pub fn footer_hints(&self) -> &'static [(&'static str, &'static str)] {
-        &[
-            ("Enter/p", "play"),
-            ("/", "filter"),
-            ("o", "sort"),
-            ("N/a", "next/queue"),
-            ("P/f", "add/like"),
-            ("w", "save to Library"),
-            ("r", "radio"),
-            ("Bksp", "back"),
-        ]
+        if self.filter_active {
+            &[("Enter", "apply filter"), ("Esc", "close filter")]
+        } else {
+            &[
+                ("Enter/p", "play"),
+                ("/", "filter"),
+                ("o", "sort"),
+                ("N/a", "next/queue"),
+                ("P/f/w", "add/like/save"),
+                ("yy/Y", "copy track/list"),
+                ("Bksp", "back"),
+            ]
+        }
     }
 
     pub fn handle_action(&mut self, action: Action) -> ViewEffect {
         if self.filter_active {
-            return match action {
-                Action::InputChar(ch) => {
-                    self.filter_query.push(ch);
+            let (handled, changed) = self.filter.handle_action(&action);
+            if handled {
+                if changed {
                     self.cursor = 0;
-                    ViewEffect::None
+                    self.scroll.reset();
                 }
-                Action::InputBackspace => {
-                    self.filter_query.pop();
-                    self.cursor = 0;
-                    ViewEffect::None
-                }
-                Action::InputSubmit | Action::InputCancel => {
-                    self.filter_active = false;
-                    ViewEffect::None
-                }
-                _ => ViewEffect::None,
-            };
+                return ViewEffect::None;
+            }
+            if matches!(action, Action::InputSubmit | Action::InputCancel) {
+                self.filter_active = false;
+            }
+            return ViewEffect::None;
         }
 
         let visible = self.visible_tracks();
@@ -108,12 +118,14 @@ impl PlaylistDetailView {
             Action::CycleSort => {
                 self.sort_mode = self.sort_mode.cycle();
                 self.cursor = 0;
+                self.scroll.reset();
                 ViewEffect::None
             }
             Action::Escape => {
-                if !self.filter_query.is_empty() {
-                    self.filter_query.clear();
+                if !self.filter.is_empty() {
+                    self.filter.clear();
                     self.cursor = 0;
+                    self.scroll.reset();
                 }
                 ViewEffect::None
             }
@@ -199,7 +211,17 @@ impl PlaylistDetailView {
                     })
                 })
                 .unwrap_or(ViewEffect::None),
-            Action::CopyUrl => ViewEffect::CopyUrl(format!(
+            Action::CopyUrl => {
+                if let Some(t) = selected {
+                    ViewEffect::CopyUrl(t.url())
+                } else {
+                    ViewEffect::CopyUrl(format!(
+                        "https://music.youtube.com/playlist?list={}",
+                        self.browse_id
+                    ))
+                }
+            }
+            Action::CopyCollectionUrl => ViewEffect::CopyUrl(format!(
                 "https://music.youtube.com/playlist?list={}",
                 self.browse_id
             )),
@@ -217,42 +239,20 @@ impl PlaylistDetailView {
         if area.width < 20 || area.height < 8 {
             return;
         }
-        let hero_h = if area.height >= 24 {
-            9
-        } else if area.height >= 16 {
-            7
-        } else {
-            5
-        };
-        let parts = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(hero_h), Constraint::Min(4)])
-            .split(area);
+        let hero = split_detail_hero(area, covers);
 
-        let max_cov_w = area.width.saturating_sub(20).min(area.width / 3).max(10);
-        let cov_w = covers.square_panel_width(hero_h, max_cov_w);
-        let hero_cols = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(cov_w),
-                Constraint::Length(1),
-                Constraint::Min(16),
-            ])
-            .split(parts[0]);
-
-        let cov_block = cover_panel_block("Playlist", None, false);
-        let cov_inner = cov_block.inner(hero_cols[0]);
-        frame.render_widget(cov_block, hero_cols[0]);
         let cover_url = self.playlist.as_ref().and_then(|p| p.summary.cover_url());
-        let cover_loading =
-            self.loading || cover_url.as_deref().is_some_and(|u| !covers.has_image(u));
-        covers.render_cover(
+        render_detail_cover(
             frame,
-            cov_inner,
-            cover_url.as_deref(),
-            cover_loading,
-            ctx.icons.playlist,
+            DetailCover {
+                area: hero.cover_area,
+                title: "Playlist",
+                url: cover_url.as_deref(),
+                entity_loading: self.loading,
+                placeholder_glyph: ctx.icons.playlist,
+            },
             ctx.spinner,
+            covers,
         );
 
         let sub = if self.saved {
@@ -261,8 +261,8 @@ impl PlaylistDetailView {
             "w save · p play"
         };
         let info_block = panel_block("Details", Some(sub), false);
-        let info_inner = info_block.inner(hero_cols[2]);
-        frame.render_widget(info_block, hero_cols[2]);
+        let info_inner = info_block.inner(hero.info_area);
+        frame.render_widget(info_block, hero.info_area);
 
         if self.loading && self.playlist.is_none() {
             frame.render_widget(
@@ -285,18 +285,25 @@ impl PlaylistDetailView {
                     Style::default().fg(ACCENT).bg(Color::Reset),
                 )));
             }
+            let mut meta = Vec::new();
+            if let Some(ref views) = pl.views
+                && !views.is_empty()
+            {
+                meta.push(views.clone());
+            }
+            meta.push(format!("{} tracks", pl.tracks.len()));
+            if let Some(ref dur) = pl.duration_text
+                && !dur.is_empty()
+            {
+                meta.push(dur.clone());
+            }
+            if let Some(ref yr) = pl.year
+                && !yr.is_empty()
+            {
+                meta.push(yr.clone());
+            }
             lines.push(Line::from(Span::styled(
-                trunc_cells(
-                    &format!(
-                        "{} tracks{}",
-                        pl.tracks.len(),
-                        pl.duration_text
-                            .as_deref()
-                            .map(|d| format!(" · {d}"))
-                            .unwrap_or_default()
-                    ),
-                    w,
-                ),
+                trunc_cells(&meta.join(" · "), w),
                 Style::default().fg(DIM).bg(Color::Reset),
             )));
             if let Some(ref desc) = pl.description {
@@ -316,10 +323,10 @@ impl PlaylistDetailView {
 
         let tr_sub = format!("{} · / filter · o sort · Bksp back", self.sort_mode.label());
         let tr_block = panel_block("Tracks", Some(&tr_sub), false);
-        let tr_inner = tr_block.inner(parts[1]);
-        frame.render_widget(tr_block, parts[1]);
+        let tr_inner = tr_block.inner(hero.body_area);
+        frame.render_widget(tr_block, hero.body_area);
 
-        let (filter_rect, table_rect) = if self.filter_active || !self.filter_query.is_empty() {
+        let (filter_rect, table_rect) = if self.filter_active || !self.filter.is_empty() {
             let split = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(1), Constraint::Min(1)])
@@ -330,22 +337,7 @@ impl PlaylistDetailView {
         };
 
         if let Some(fr) = filter_rect {
-            let line = Line::from(vec![
-                Span::styled("/ ", Style::default().fg(ACCENT).bg(Color::Reset)),
-                Span::styled(
-                    if self.filter_active {
-                        format!("{}█", self.filter_query)
-                    } else {
-                        self.filter_query.clone()
-                    },
-                    Style::default().fg(TEXT).bg(if self.filter_active {
-                        CURSOR_BG
-                    } else {
-                        Color::Reset
-                    }),
-                ),
-            ]);
-            frame.render_widget(Paragraph::new(line), fr);
+            render_filter_bar(frame, fr, &self.filter, self.filter_active, "/ ", "");
         }
 
         let playing_vid = ctx.snapshot.track.as_ref().map(|t| t.video_id.as_str());
@@ -359,6 +351,7 @@ impl PlaylistDetailView {
                     t.duration_text(),
                 ]);
                 r.is_playing = playing_vid == Some(t.video_id.as_str());
+                r.is_dim = !t.is_available;
                 r
             })
             .collect();
@@ -385,11 +378,12 @@ impl PlaylistDetailView {
                 columns: &cols,
                 rows: &rows,
                 cursor: self.cursor,
+                scroll: Some(&self.scroll),
                 focused: true,
                 show_header: true,
                 loading: self.loading,
                 loading_label: "Loading playlist tracks…",
-                empty_text: if self.filter_query.is_empty() {
+                empty_text: if self.filter.is_empty() {
                     "Playlist is empty"
                 } else {
                     "No tracks match filter"

@@ -5,7 +5,6 @@ use ratatui::widgets::{Block, BorderType, Borders, Padding};
 use musick_core::{IconMode, SearchItem};
 
 pub const ACCENT: Color = Color::Rgb(0x26, 0xd9, 0xb4);
-pub const ACCENT_BRIGHT: Color = Color::Rgb(0x4e, 0xf0, 0xce);
 pub const BORDER: Color = Color::Rgb(0xa6, 0xa6, 0xa6);
 pub const BORDER_DIM: Color = Color::Rgb(0x7c, 0x7c, 0x7c);
 pub const SCROLL_TRACK: Color = Color::Rgb(0x3a, 0x3a, 0x3a);

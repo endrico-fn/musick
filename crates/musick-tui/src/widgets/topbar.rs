@@ -10,8 +10,50 @@ use crate::text::cell_width;
 use crate::theme::{ACCENT, BORDER, DIM, IconSet, TEXT, WARN_GOLD};
 use crate::widgets::BrailleSpinner;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RootTab {
+    #[default]
+    Player,
+    Playlists,
+    Library,
+    Queue,
+    Settings,
+}
+
+impl RootTab {
+    pub const ALL: &'static [Self] = &[
+        Self::Player,
+        Self::Playlists,
+        Self::Library,
+        Self::Queue,
+        Self::Settings,
+    ];
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Player => 0,
+            Self::Playlists => 1,
+            Self::Library => 2,
+            Self::Queue => 3,
+            Self::Settings => 4,
+        }
+    }
+
+    pub fn from_index(idx: usize) -> Option<Self> {
+        Self::ALL.get(idx).copied()
+    }
+
+    pub fn next(self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        Self::ALL[(self.index() + Self::ALL.len() - 1) % Self::ALL.len()]
+    }
+}
+
 pub const ROOT_TABS: &[(&str, &str)] = &[
-    ("home", "1 Home"),
+    ("player", "1 Player"),
     ("playlists", "2 Playlists"),
     ("library", "3 Library"),
     ("queue", "4 Queue"),
@@ -19,7 +61,7 @@ pub const ROOT_TABS: &[(&str, &str)] = &[
 ];
 
 pub const ROOT_TABS_COMPACT: &[(&str, &str)] = &[
-    ("home", "1 Home"),
+    ("player", "1 Play"),
     ("playlists", "2 Lists"),
     ("library", "3 Lib"),
     ("queue", "4 Queue"),
@@ -27,7 +69,7 @@ pub const ROOT_TABS_COMPACT: &[(&str, &str)] = &[
 ];
 
 pub struct TopBar<'a> {
-    pub active_tab: usize,
+    pub active_tab: RootTab,
     pub icons: IconSet,
     pub auth_mode: AuthMode,
     pub syncing: bool,
@@ -87,7 +129,7 @@ impl Widget for TopBar<'_> {
                 x += gap_w;
             }
             let start = x;
-            let is_act = idx == self.active_tab;
+            let is_act = idx == self.active_tab.index();
             let style = if is_act {
                 Style::default()
                     .fg(ACCENT)

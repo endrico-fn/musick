@@ -71,7 +71,54 @@ fn query_prefix_and_youtube_url_extraction() {
         extract_youtube_target("https://music.youtube.com/channel/UC123456"),
         Some(YoutubeTarget::Artist("UC123456".into()))
     );
+    assert_eq!(
+        extract_youtube_target("https://youtube.com/@daftpunk"),
+        Some(YoutubeTarget::Handle("daftpunk".into()))
+    );
     assert_eq!(extract_youtube_target("not a url"), None);
+
+    assert!(
+        (musick_core::search::parse_play_count(Some("25M monthly audience")) - 25e6).abs() < 1.0
+    );
+    assert!((musick_core::search::parse_play_count(Some("1,2jt")) - 1.2e6).abs() < 1.0);
+    assert!(
+        (musick_core::search::parse_play_count(Some("1,234,567 views")) - 1_234_567.0).abs() < 1.0
+    );
+}
+
+#[test]
+fn lrclib_candidate_scorer_prefers_close_duration_synced_match() {
+    let candidates = vec![
+        json!({
+            "trackName": "Instant Crush",
+            "artistName": "Daft Punk",
+            "duration": 180.0,
+            "syncedLyrics": "[00:01.00] wrong edit"
+        }),
+        json!({
+            "trackName": "Instant Crush",
+            "artistName": "Daft Punk",
+            "duration": 337.0,
+            "plainLyrics": "plain only"
+        }),
+        json!({
+            "trackName": "Instant Crush",
+            "artistName": "Daft Punk",
+            "duration": 338.0,
+            "syncedLyrics": "[00:10.00] exact match"
+        }),
+    ];
+    let best = musick_core::lyrics::pick_best_lrclib_candidate(
+        &candidates,
+        "Instant Crush",
+        Some("Daft Punk"),
+        Some(337),
+    )
+    .unwrap();
+    assert_eq!(
+        best.get("syncedLyrics").and_then(|v| v.as_str()),
+        Some("[00:10.00] exact match")
+    );
 }
 
 #[test]

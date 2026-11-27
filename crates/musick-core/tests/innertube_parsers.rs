@@ -6,9 +6,11 @@ use serde_json::{Map, Value, json};
 use tempfile::tempdir;
 
 use musick_core::innertube::parsers::{
-    extract_plays_from_browse, extract_visitor_data, parse_album, parse_artist, parse_home_feed,
-    parse_playlist, parse_playlist_edit_results, parse_search_results, parse_two_row_item,
-    parse_watch_playlist, parse_yt_lyrics,
+    extract_plays_from_browse, extract_visitor_data, parse_album, parse_artist,
+    parse_artist_releases_with_continuation, parse_discover_feed, parse_playlist,
+    parse_playlist_edit_results, parse_search_results, parse_search_results_with_continuation,
+    parse_spelling_hint, parse_suggestions, parse_two_row_item, parse_watch_playlist,
+    parse_yt_lyrics,
 };
 use musick_core::innertube::search_filter_params;
 use musick_core::{
@@ -41,7 +43,7 @@ fn parses_home_mixes_and_new_releases_and_visitor_data() {
         Some("CgtWT19WSVNJVE9SXzEyMw%3D%3D")
     );
 
-    let feed = parse_home_feed(Some(&home), Some(&new_rel), None, None);
+    let feed = parse_discover_feed(Some(&home), Some(&new_rel), None, None);
     assert_eq!(feed.mixes.len(), 1);
     assert_eq!(feed.mixes[0].video_id, "mix_v1");
     assert_eq!(feed.mixes[0].title, "Instant Crush");
@@ -336,4 +338,333 @@ fn parses_live_youtube_music_shapes_for_thumbnails_radio_album_playlist_and_sear
     assert_ne!(pl_param, comm_param);
     assert!(!pl_param.contains("%3D"));
     assert!(!comm_param.contains("%3D"));
+}
+
+#[test]
+fn parses_playlist_second_subtitle_split_and_append_continuation_items() {
+    let raw = json!({
+        "header": {
+            "musicDetailHeaderRenderer": {
+                "title": { "runs": [{ "text": "Midnight Synth" }] },
+                "secondSubtitle": {
+                    "runs": [
+                        { "text": "1.2M views" },
+                        { "text": " • " },
+                        { "text": "50 songs" },
+                        { "text": " • " },
+                        { "text": "3 hours 10 minutes" }
+                    ]
+                }
+            }
+        },
+        "onResponseReceivedActions": [{
+            "appendContinuationItemsAction": {
+                "continuationItems": [
+                    {
+                        "musicResponsiveListItemRenderer": {
+                            "flexColumns": [
+                                {
+                                    "musicResponsiveListItemFlexColumnRenderer": {
+                                        "text": {
+                                            "runs": [{
+                                                "text": "Nightcall",
+                                                "navigationEndpoint": {
+                                                    "watchEndpoint": { "videoId": "cont_vid_1" }
+                                                }
+                                            }]
+                                        }
+                                    }
+                                },
+                                {
+                                    "musicResponsiveListItemFlexColumnRenderer": {
+                                        "text": {
+                                            "runs": [
+                                                { "text": "Kavinsky" },
+                                                { "text": " & " },
+                                                { "text": "Lovefoxxx" }
+                                            ]
+                                        }
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    {
+                        "continuationItemRenderer": {
+                            "continuationEndpoint": {
+                                "continuationCommand": { "token": "NEXT_APPEND_TOKEN" }
+                            }
+                        }
+                    }
+                ]
+            }
+        }]
+    });
+
+    let (pl, cont) = parse_playlist("PL_CONT", &raw);
+    assert_eq!(pl.views.as_deref(), Some("1.2M views"));
+    assert_eq!(pl.summary.count.as_deref(), Some("50 songs"));
+    assert_eq!(pl.duration_text.as_deref(), Some("3 hours 10 minutes"));
+    assert_eq!(pl.tracks.len(), 1);
+    assert_eq!(pl.tracks[0].video_id, "cont_vid_1");
+    assert_eq!(pl.tracks[0].artists.len(), 2);
+    assert_eq!(pl.tracks[0].artists[0].name, "Kavinsky");
+    assert_eq!(pl.tracks[0].artists[1].name, "Lovefoxxx");
+    assert_eq!(cont.as_deref(), Some("NEXT_APPEND_TOKEN"));
+}
+
+#[test]
+fn parses_artist_views_separates_featured_and_live_shelves_and_fixes_singles_kind() {
+    let raw = json!({
+        "header": {
+            "musicImmersiveHeaderRenderer": {
+                "title": { "runs": [{ "text": "Justice" }] }
+            }
+        },
+        "contents": {
+            "singleColumnBrowseResultsRenderer": {
+                "tabs": [{
+                    "tabRenderer": {
+                        "content": {
+                            "sectionListRenderer": {
+                                "contents": [
+                                    {
+                                        "musicDescriptionShelfRenderer": {
+                                            "subheader": { "runs": [{ "text": "910M views" }] },
+                                            "description": { "runs": [{ "text": "French electronic duo" }] }
+                                        }
+                                    },
+                                    {
+                                        "musicCarouselShelfRenderer": {
+                                            "header": {
+                                                "musicCarouselShelfBasicHeaderRenderer": {
+                                                    "title": { "runs": [{ "text": "Albums" }] }
+                                                }
+                                            },
+                                            "contents": [{
+                                                "musicTwoRowItemRenderer": {
+                                                    "title": { "runs": [{ "text": "Cross" }] },
+                                                    "subtitle": { "runs": [{ "text": "2007" }] },
+                                                    "navigationEndpoint": {
+                                                        "browseEndpoint": { "browseId": "MPREb_cross" }
+                                                    }
+                                                }
+                                            }]
+                                        }
+                                    },
+                                    {
+                                        "musicCarouselShelfRenderer": {
+                                            "header": {
+                                                "musicCarouselShelfBasicHeaderRenderer": {
+                                                    "title": { "runs": [{ "text": "Featured on" }] }
+                                                }
+                                            },
+                                            "contents": [
+                                                {
+                                                    "musicTwoRowItemRenderer": {
+                                                        "title": { "runs": [{ "text": "Electro Compil" }] },
+                                                        "subtitle": { "runs": [{ "text": "Album" }] },
+                                                        "navigationEndpoint": {
+                                                            "browseEndpoint": { "browseId": "MPREb_comp" }
+                                                        }
+                                                    }
+                                                },
+                                                {
+                                                    "musicTwoRowItemRenderer": {
+                                                        "title": { "runs": [{ "text": "French Touch Essentials" }] },
+                                                        "subtitle": { "runs": [{ "text": "YouTube Music" }] },
+                                                        "navigationEndpoint": {
+                                                            "browseEndpoint": { "browseId": "VLRDCLAK_ft" }
+                                                        }
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        "musicCarouselShelfRenderer": {
+                                            "header": {
+                                                "musicCarouselShelfBasicHeaderRenderer": {
+                                                    "title": { "runs": [{ "text": "Live performances" }] }
+                                                }
+                                            },
+                                            "contents": [{
+                                                "musicTwoRowItemRenderer": {
+                                                    "title": { "runs": [{ "text": "Genesis (Live)" }] },
+                                                    "subtitle": { "runs": [{ "text": "Justice" }, { "text": " • " }, { "text": "12M plays" }] },
+                                                    "navigationEndpoint": {
+                                                        "watchEndpoint": { "videoId": "live_v1" }
+                                                    }
+                                                }
+                                            }]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }]
+            }
+        }
+    });
+
+    let artist = parse_artist("UC_just", &raw);
+    assert_eq!(artist.views.as_deref(), Some("910M views"));
+    assert_eq!(artist.albums.len(), 1);
+    assert_eq!(artist.albums[0].browse_id, "MPREb_cross");
+    assert_eq!(artist.playlists.len(), 1);
+    assert_eq!(artist.playlists[0].browse_id, "RDCLAK_ft");
+    assert_eq!(artist.videos.len(), 1);
+    assert_eq!(artist.videos[0].video_id, "live_v1");
+    assert_eq!(artist.videos[0].plays.as_deref(), Some("12M"));
+
+    // Artist Singles release page: overrides default "Album" -> "Single" while preserving explicit "EP"
+    let singles_raw = json!({
+        "contents": {
+            "gridRenderer": {
+                "items": [
+                    {
+                        "musicTwoRowItemRenderer": {
+                            "title": { "runs": [{ "text": "Generator" }] },
+                            "subtitle": { "runs": [{ "text": "2024" }] },
+                            "navigationEndpoint": { "browseEndpoint": { "browseId": "MPREb_gen" } }
+                        }
+                    },
+                    {
+                        "musicTwoRowItemRenderer": {
+                            "title": { "runs": [{ "text": "Planisphere" }] },
+                            "subtitle": { "runs": [{ "text": "EP" }, { "text": " • " }, { "text": "2008" }] },
+                            "navigationEndpoint": { "browseEndpoint": { "browseId": "MPREb_plan" } }
+                        }
+                    }
+                ]
+            }
+        }
+    });
+    let (singles, _) = parse_artist_releases_with_continuation(&singles_raw, "Single");
+    assert_eq!(singles.len(), 2);
+    assert_eq!(singles[0].kind, "Single");
+    assert_eq!(singles[1].kind, "EP");
+}
+
+#[test]
+fn parses_mpla_artist_card_shelf_metadata_spelling_hint_and_entity_suggestions() {
+    // 1. MPLA browseId maps to Artist with stripped UC id
+    let mpla_row = json!({
+        "title": { "runs": [{ "text": "Daft Punk" }] },
+        "subtitle": { "runs": [{ "text": "Artist" }] },
+        "navigationEndpoint": {
+            "browseEndpoint": { "browseId": "MPLAUC_dp_123" }
+        }
+    });
+    match parse_two_row_item(&mpla_row).unwrap() {
+        SearchItem::Artist(a) => assert_eq!(a.browse_id, "UC_dp_123"),
+        other => panic!("expected Artist, got {other:?}"),
+    }
+
+    // 2. musicCardShelfRenderer preserves Track album/plays/unlinked artists + continuation + didYouMean
+    let search_raw = json!({
+        "contents": {
+            "tabbedSearchResultsRenderer": {
+                "tabs": [{
+                    "tabRenderer": {
+                        "content": {
+                            "sectionListRenderer": {
+                                "contents": [
+                                    {
+                                        "itemSectionRenderer": {
+                                            "contents": [{
+                                                "didYouMeanRenderer": {
+                                                    "correctedQuery": { "runs": [{ "text": "daft punk" }] }
+                                                }
+                                            }]
+                                        }
+                                    },
+                                    {
+                                        "musicCardShelfRenderer": {
+                                            "title": {
+                                                "runs": [{
+                                                    "text": "Instant Crush",
+                                                    "navigationEndpoint": {
+                                                        "watchEndpoint": { "videoId": "top_v1" }
+                                                    }
+                                                }]
+                                            },
+                                            "subtitle": {
+                                                "runs": [
+                                                    { "text": "Song" },
+                                                    { "text": " • " },
+                                                    { "text": "Daft Punk", "navigationEndpoint": { "browseEndpoint": { "browseId": "UCdp" } } },
+                                                    { "text": " & " },
+                                                    { "text": "Julian Casablancas" },
+                                                    { "text": " • " },
+                                                    { "text": "Random Access Memories", "navigationEndpoint": { "browseEndpoint": { "browseId": "MPREb_ram" } } },
+                                                    { "text": " • " },
+                                                    { "text": "530M plays" },
+                                                    { "text": " • " },
+                                                    { "text": "5:37" }
+                                                ]
+                                            }
+                                        }
+                                    }
+                                ],
+                                "continuations": [{
+                                    "nextContinuationData": { "continuation": "SEARCH_CONT_2" }
+                                }]
+                            }
+                        }
+                    }
+                }]
+            }
+        }
+    });
+
+    assert_eq!(
+        parse_spelling_hint(&search_raw).as_deref(),
+        Some("daft punk")
+    );
+    let (items, cont) = parse_search_results_with_continuation(&search_raw);
+    assert_eq!(cont.as_deref(), Some("SEARCH_CONT_2"));
+    assert_eq!(items.len(), 1);
+    match &items[0] {
+        SearchItem::Track(t) => {
+            assert_eq!(t.video_id, "top_v1");
+            assert_eq!(t.artists.len(), 2);
+            assert_eq!(t.artists[0].name, "Daft Punk");
+            assert_eq!(t.artists[1].name, "Julian Casablancas");
+            assert_eq!(t.album.as_deref(), Some("Random Access Memories"));
+            assert_eq!(t.album_id.as_deref(), Some("MPREb_ram"));
+            assert_eq!(t.plays.as_deref(), Some("530M"));
+            assert_eq!(t.duration, Some(337));
+        }
+        other => panic!("expected top track, got {other:?}"),
+    }
+
+    // 3. Entity suggestions inside musicResponsiveListItemRenderer are included alongside text suggestions
+    let sugg_raw = json!({
+        "contents": [{
+            "searchSuggestionsSectionRenderer": {
+                "contents": [
+                    {
+                        "searchSuggestionRenderer": {
+                            "navigationEndpoint": { "searchEndpoint": { "query": "daft punk" } }
+                        }
+                    },
+                    {
+                        "musicResponsiveListItemRenderer": {
+                            "flexColumns": [{
+                                "musicResponsiveListItemFlexColumnRenderer": {
+                                    "text": { "runs": [{ "text": "Discovery" }] }
+                                }
+                            }]
+                        }
+                    }
+                ]
+            }
+        }]
+    });
+    assert_eq!(
+        parse_suggestions(&sugg_raw),
+        vec!["daft punk".to_string(), "Discovery".to_string()]
+    );
 }

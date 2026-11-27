@@ -14,6 +14,7 @@ pub struct LyricsBox<'a> {
     pub lyrics: &'a Lyrics,
     pub active_idx: Option<usize>,
     pub has_track: bool,
+    pub loading: bool,
     pub show_translation: bool,
     pub translating: bool,
     pub blank_between: bool,
@@ -63,6 +64,19 @@ impl Widget for LyricsBox<'_> {
                 Style::default().fg(DIM).bg(Color::Reset),
             ))
             .render(
+                Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    height: 1,
+                },
+                buf,
+            );
+            return;
+        }
+
+        if self.loading && self.lyrics.is_empty() {
+            self.spinner.loading_line("Loading lyrics…").render(
                 Rect {
                     x: area.x,
                     y: area.y,

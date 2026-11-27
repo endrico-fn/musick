@@ -1,70 +1,89 @@
 # musick
 
-Modern full-Rust TUI streaming audio player for YouTube Music.
+Full-Rust TUI streaming audio player for YouTube Music — keyboard-driven, cookie-free by default, and built for modern Linux terminals (Kitty primary target, with Sixel, Halfblock, and text-only fallbacks).
 
-## Highlights
+## Install on Linux (Zero-Compile)
 
-- **Privacy-first (`no cookies` by default):** Launches strictly in `Anonymous` mode with zero cookies, zero credentials, and playback history/telemetry disabled.
-- **Opt-in 2-Way Sync:** Sign in optionally via **OAuth2 TV/Device Flow** (`musick auth oauth`) or **Browser Auth (`SAPISIDHASH`)** (`musick auth browser`) stored in the OS Keyring (`0o600` file fallback) with Brand Account support. Syncs Playlists, Liked Songs, Saved Albums, Saved Artists, and Saved Community Playlists between TUI and browser.
-- **Professional Multi-Tier Cache:** L1 bounded LRU + L2 SQLite WAL `cache.db` + `images/` blob cache with automatic byte/file/TTL budgets and background janitor, strictly separated from user data (`musick.db`). Clearing cache never deletes playlists or library items.
-- **YouTube Music Algorithm Parity:** Coherent `visitorData`, Home **`Mixes` | `New Releases`** feeds, infinite radio `continuation`, `rapidfuzz` semantic/lyric search ranking, and opt-in playback telemetry.
-- **Audio & Visuals:** Persistent `mpv` JSON IPC (gapless, `dynaudnorm`, cubic lookahead `alimiter` for 101–130% overdrive), hybrid `RustyPipe` fast-path + `yt-dlp --no-cookies` circuit-breaker fallback, Linux MPRIS D-Bus controls, 1:1 terminal cover art (Kitty / Sixel / Halfblock), `cava` spectrum visualizer, synced/plain lyrics + Indonesian translation, and Braille dot loading indicators (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`).
+### Quick Installer (Prebuilt Binary + SHA256 Verification)
 
-## Workspace Structure
+```sh
+curl -fsSL https://raw.githubusercontent.com/endrico-fn/musick/main/scripts/install.sh | sh
+```
 
-- `crates/musick-core` — Domain models, XDG paths & config, privacy-first auth, SQLite WAL `UserStore`, multi-tier `CacheManager`, native InnerTube client, search ranker, lyrics & translation, image service, and offline-first 2-way `SyncEngine`.
-- `crates/musick-audio` — Two-tier `PlayQueue`, `MpvIpcBackend`, hybrid `StreamResolver` (`fast-resolver` feature for RustyPipe), `PlayerEngine`, `CavaRunner`, and Linux `MprisService`.
-- `crates/musick-tui` — Ratatui TUI (`musick` binary), collision-free Vim keymap, widgets, 5 root views (`Home`, `Playlists`, `Library`, `Queue`, `Settings`), detail views (`Artist`, `Album`, `PlaylistDetail`), and CLI subcommands.
+- Installs the default prebuilt binary (`x86_64` / `aarch64`) to `~/.local/bin/musick`.
+- Pass `--fast` for the optional fast-resolver variant (`rustypipe`, GPL-3.0).
+- Update any time without recompiling:
 
-## Runtime Dependencies
+```sh
+musick update           # download & verify latest release
+musick update --check   # check for updates only
+musick update --fast    # switch to / update fast-resolver variant
+```
 
-- `mpv` (required for audio playback)
-- `yt-dlp` (required for fallback stream resolution and YouTube caption lyrics)
-- `cava` (optional, for live audio spectrum visualization)
+### Arch Linux (AUR)
 
-## Build & Run
+A ready-to-publish [`PKGBUILD`](packaging/aur/PKGBUILD) (`musick-bin`) is provided in `packaging/aur/`.
 
-```bash
-cargo build --release
+### Cargo Binstall / From Source
+
+```sh
+cargo binstall musick-tui          # prebuilt release via GitHub Releases
+# or compile from source:
+cargo build --release -p musick-tui
 ./target/release/musick
 ```
 
-To build without GPL-3.0 `rustypipe` (pure MIT/Apache/MPL dependencies using `yt-dlp` only):
+## Runtime Dependencies
 
-```bash
-cargo build --release --no-default-features --package musick-tui
+- **Required**: `mpv` (audio playback over IPC), `yt-dlp` (stream resolution & YouTube captions)
+- **Recommended**: Kitty terminal (1:1 pixel-centered album artwork via Kitty graphics protocol; Sixel, Halfblock, and `Off` fallback supported)
+- **Optional**: `cava` (real-time audio spectrum visualizer)
+
+Verify your environment with:
+
+```sh
+musick doctor
 ```
+
+## Highlights
+
+- **Privacy-first (`no cookies` by default)**: Runs fully anonymous out of the box. Optional OAuth2 TV/Device login or Browser Auth (`SAPISIDHASH`) enables 2-way library/playlist sync and opt-in playback telemetry.
+- **Full YouTube Music catalog**: Discover (`Mixes · New Releases · Featured`), fuzzy + semantic search with pagination, prefix filters (`a:`, `al:`, `pl:`, `c:`, `v:`, `s:`), and URL paste support.
+- **Rich Artist, Album & Playlist views**: Split Artist Overview with interactive Top Songs & Latest Releases / Fans Also Like panes, full discography pagination, biography viewer (`i`), shuffle (`x`), radio (`r`), inline `/` filtering, and sorting (`o`).
+- **Synced Lyrics + Indonesian Translation**: LRCLIB, YouTube Music timed/plain lyrics, and YouTube captions with live offset adjustment (`,` / `.`) and `t` translation toggle.
+- **Two-tier Queue & Endless Radio**: Priority `Next Up` queue, gapless transitions, next-track prefetch, undo (`u`), and opt-in session restore across restarts.
+- **L1 + L2 Caching**: Bounded in-memory LRU + SQLite/disk caches with configurable TTL, cover budget pruning, and off-thread terminal graphics encoding.
 
 ## CLI Subcommands
 
-```bash
-musick                          # Launch TUI
-musick auth status              # Inspect auth & telemetry state
+```sh
+musick                              # Launch TUI
+musick --log-file /tmp/musick.log   # Launch with debug logging (or set MUSICK_LOG=debug)
+musick doctor [--offline]           # Check mpv, yt-dlp, cava, terminal graphics & network
+musick update [--check] [--fast]    # Self-update from GitHub Releases (SHA256 verified)
+musick auth status                  # Inspect auth & telemetry state
 musick auth oauth --client-id <ID> --client-secret <SECRET>
-musick auth browser             # Import DevTools headers or Cookie string via stdin
-musick auth logout              # Wipe credentials, purge remote cache, keep local playlists
-musick cache stats              # Show disk cache usage
-musick cache prune              # Run cache janitor now
-musick cache clear              # Clear caches & rotate visitorData (preserves musick.db)
+musick auth browser                 # Import DevTools headers, curl snippet, or Cookie via stdin
+musick auth logout                  # Wipe credentials, purge remote cache, keep local playlists
+musick cache stats                  # Show disk cache usage
+musick cache prune                  # Run cache janitor now
+musick cache clear                  # Clear caches & rotate visitorData (preserves musick.db)
 ```
 
-## Collision-Free Vim Keymap
+## Keybindings (Vim Mode)
 
-| Scope | Key(s) | Action |
-| :--- | :--- | :--- |
-| **Tabs** | `1`–`5`, `gt` / `gT` | Switch root tabs (`Home`, `Playlists`, `Library`, `Queue`, `Settings`) |
-| **Sub-tabs / Panes** | `Tab` / `Shift+Tab`, `Ctrl+w` + `h/j/k/l` | Switch sub-tab (`Mixes` / `New Releases`, Library, Artist) / focus pane |
-| **Global** | `L` (`Shift+L`) / `t` | Toggle expanded Lyrics / Toggle Indonesian translation |
-| **Global** | `S` (`Shift+S`) / `/` / `?` / `q` | Sync Now / Search or Filter / Keymap Help / Clean Quit |
-| **Playback** | `Space`, `n`/`b`, `>`/`<` (`]`/`[`), `+`/`-`, `s`, `m` | Play-Pause, Next/Prev, Seek ±5s, Volume ±5% (0–130%), Shuffle, Repeat |
-| **Navigation** | `h/j/k/l`, `gg`/`G`, `Ctrl+d`/`Ctrl+u`, `Backspace`/`H`, `Esc` | Vim motion, top/bottom, half-page, go back, cancel |
-| **Item Actions** | `Enter`/`p`, `N`/`a`, `P`/`f`/`w`, `r`/`o`/`v`/`c`, `yy` | Open-Play, Play Next/Queue, Add Playlist/Like/Save, Radio/Sort/Grid/Size, Copy URL |
-| **Editing** | `dd`/`Del`, `J`/`K`, `u`/`D`/`C` | Delete/Remove, Reorder down/up, Undo/Deduplicate/Clear upcoming |
-| **Playlists** | `c`, `R`, `I`, `E`, `U` | Create, Rename, Import URL/File, Export JSON+M3U8, Upload local to YTM |
-
-## Storage Layout (XDG)
-
-- `$XDG_CONFIG_HOME/musick/settings.toml` — User settings
-- `$XDG_DATA_HOME/musick/musick.db` — User playlists, liked songs, saved collections, sync outbox
-- `$XDG_CACHE_HOME/musick/{cache.db,images/,rustypipe/}` — Self-pruning caches
-- `$XDG_RUNTIME_DIR/musick/mpv-<pid>.sock` — Private (`0o700`) mpv IPC socket
+| Key | Action |
+|---|---|
+| `1`–`5` / `[` `]` | Switch tabs (`1 Player`, `2 Playlists`, `3 Library`, `4 Queue`, `5 Settings`) |
+| `j` `k` / `Ctrl-d` `Ctrl-u` / `gg` `G` | Navigate lists, half-page scroll, jump top/bottom |
+| `h` `l` / `Tab` `Shift-Tab` | Switch panes or sub-tabs |
+| `/` / `g/` | Inline filter (or search on Player) / Jump to global search from anywhere |
+| `Enter` / `p` | Open / play context — or direct play |
+| `Space` / `>` `<` / `{` `}` | Play/pause, next/prev track, seek ±30s (`←`/`→` ±5s) |
+| `+` `-` / `M` / `z` / `Z` | Volume, mute, shuffle, repeat mode |
+| `N` / `a` / `P` / `f` / `w` `W` | Play next, append queue, add to playlist, like, save item / follow artist |
+| `L` / `t` / `,` `.` / `zz` | Expand lyrics, toggle ID translation, lyrics offset ±0.25s, center lyrics |
+| `ga` `gl` / `gA` `gL` | Jump to selected track's Artist/Album — or currently playing Artist/Album |
+| `r` / `x` / `i` / `o` | Start Radio, artist shuffle, artist bio modal, cycle sort |
+| `c` `R` `dd` `J` `K` `I` `E` `U` | Playlist create, rename, delete/remove, reorder, import, export, upload to YTM |
+| `yy` / `Y` / `S` / `gr` / `?` / `q` | Copy item URL, copy collection URL, sync now, refresh Discover, help, quit |

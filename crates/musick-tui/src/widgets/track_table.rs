@@ -6,7 +6,9 @@ use ratatui::widgets::Widget;
 
 use crate::text::{Align, align_cells};
 use crate::theme::{ACCENT, BORDER_DIM, CURSOR_BG, CURSOR_BLUR_BG, DIM, IconSet, TEXT};
-use crate::widgets::{BrailleSpinner, render_scrollbar};
+use crate::widgets::{
+    BrailleSpinner, DEFAULT_SCROLLOFF, ScrollState, compute_scroll_offset, render_scrollbar,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ColumnDef<'a> {
@@ -38,6 +40,7 @@ pub struct TrackTable<'a> {
     pub columns: &'a [ColumnDef<'a>],
     pub rows: &'a [TableRow],
     pub cursor: usize,
+    pub scroll: Option<&'a ScrollState>,
     pub focused: bool,
     pub show_header: bool,
     pub loading: bool,
@@ -221,10 +224,20 @@ impl Widget for TrackTable<'_> {
         }
 
         let clamped_cursor = self.cursor.min(self.rows.len().saturating_sub(1));
-        let scroll_start = if clamped_cursor >= visible_rows {
-            clamped_cursor + 1 - visible_rows
-        } else {
-            0
+        let scroll_start = match self.scroll {
+            Some(s) => s.ensure_visible(
+                clamped_cursor,
+                visible_rows,
+                self.rows.len(),
+                DEFAULT_SCROLLOFF,
+            ),
+            None => compute_scroll_offset(
+                0,
+                clamped_cursor,
+                visible_rows,
+                self.rows.len(),
+                DEFAULT_SCROLLOFF,
+            ),
         };
 
         for (offset, row_idx) in (scroll_start..self.rows.len())

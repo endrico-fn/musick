@@ -6,21 +6,21 @@ use ratatui::widgets::{Clear, Paragraph, Wrap};
 
 use musick_core::{Track, UserPlaylist};
 
-use crate::text::trunc_cells;
+use crate::text::{trunc_cells, wrap_cells};
 use crate::theme::{ACCENT, CURSOR_BG, DIM, TEXT, WARN_GOLD, panel_block};
-use crate::widgets::BrailleSpinner;
+use crate::widgets::{BrailleSpinner, TextInput, render_scrollbar};
 
 #[derive(Debug, Clone)]
 pub enum ActiveModal {
     CreatePlaylist {
-        input: String,
+        input: TextInput,
     },
     RenamePlaylist {
         playlist_id: String,
-        input: String,
+        input: TextInput,
     },
     ImportPlaylistUrl {
-        input: String,
+        input: TextInput,
     },
     AddToPlaylist {
         track: Track,
@@ -47,6 +47,11 @@ pub enum ActiveModal {
         page_id: String,
         active_field: usize,
         error: Option<String>,
+    },
+    TextViewer {
+        title: String,
+        body: String,
+        scroll: usize,
     },
     KeymapHelp {
         scroll: usize,
@@ -318,6 +323,73 @@ pub fn render_modal(
             }
             frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
         }
+        ActiveModal::TextViewer {
+            title,
+            body,
+            scroll,
+        } => {
+            let rect = centered_rect(76, 18, area);
+            frame.render_widget(Clear, rect);
+            let block = panel_block(title, Some("j/k scroll · Esc/i close"), true);
+            let inner = block.inner(rect);
+            frame.render_widget(block, rect);
+            if inner.width < 6 || inner.height == 0 {
+                return;
+            }
+            let wrap_w = usize::from(inner.width.saturating_sub(2)).max(4);
+            let mut wrapped_lines: Vec<String> = Vec::new();
+            for para in body.split('\n') {
+                let p = para.trim();
+                if p.is_empty() {
+                    if !wrapped_lines.is_empty() {
+                        wrapped_lines.push(String::new());
+                    }
+                } else {
+                    wrapped_lines.extend(wrap_cells(p, wrap_w));
+                }
+            }
+            let vis_h = usize::from(inner.height);
+            let total = wrapped_lines.len();
+            let max_scroll = total.saturating_sub(vis_h);
+            let clamped = (*scroll).min(max_scroll);
+            let has_sb = total > vis_h && inner.width > 8;
+            let text_w = if has_sb {
+                inner.width.saturating_sub(2)
+            } else {
+                inner.width
+            };
+            let lines: Vec<Line<'_>> = wrapped_lines
+                .iter()
+                .skip(clamped)
+                .take(vis_h)
+                .map(|ln| {
+                    Line::from(Span::styled(
+                        ln.as_str(),
+                        Style::default().fg(TEXT).bg(Color::Reset),
+                    ))
+                })
+                .collect();
+            frame.render_widget(
+                Paragraph::new(lines),
+                Rect {
+                    x: inner.x,
+                    y: inner.y,
+                    width: text_w,
+                    height: inner.height,
+                },
+            );
+            if has_sb {
+                render_scrollbar(
+                    frame.buffer_mut(),
+                    inner.x + inner.width - 1,
+                    inner.y,
+                    vis_h,
+                    total,
+                    clamped,
+                    true,
+                );
+            }
+        }
         ActiveModal::KeymapHelp { scroll } => {
             let rect = centered_rect(84, 22, area);
             frame.render_widget(Clear, rect);
@@ -332,44 +404,45 @@ pub fn render_modal(
             let entries: &[(&str, &str)] = &[
                 (
                     "1 - 5 / gt gT",
-                    "Switch root tabs (Home · Playlists · Library · Queue · Settings)",
+                    "Switch root tabs (Player · Playlists · Library · Queue · Settings)",
                 ),
                 (
                     "Tab / Shift+Tab",
-                    "Next / previous sub-tab (Mixes/New Releases, Library, Artist)",
+                    "Next / previous sub-tab (Discover, Library, Artist)",
                 ),
                 ("Ctrl+w + h/j/k/l", "Focus split panes"),
-                (
-                    "h j k l / Arrows",
-                    "Move cursor across lists, tables, and cover grids",
-                ),
+                ("h j k l / Arrows", "Move cursor across lists and tables"),
                 ("gg / G", "Jump to top / bottom"),
                 ("Ctrl+d / Ctrl+u", "Half-page scroll down / up"),
+                (
+                    "ga / gl  gA / gL",
+                    "Jump to hovered or playing track's Artist / Album",
+                ),
+                ("gr / g/", "Refresh Discover feed / Global search"),
                 ("L (Shift+L)", "Toggle expanded Lyrics globally"),
+                ("zz / 0", "Recenter Lyrics on active line"),
+                (", / .", "Shift Lyrics timing -0.25s / +0.25s"),
                 ("t", "Toggle Indonesian lyrics translation"),
                 (
                     "S (Shift+S)",
                     "Sync playlists & library with YouTube Music now",
                 ),
-                (
-                    "/",
-                    "Search (Home) or inline filter (Playlists / PlaylistDetail / Library)",
-                ),
+                ("/", "Search (Player) or inline filter in active view"),
                 ("Space / n / b", "Play-Pause / Next track / Previous track"),
-                ("> <  or  ] [", "Seek +5s / -5s"),
-                ("+ -", "Volume +5% / -5% (0-130% with lookahead limiter)"),
+                ("] [  or  } {", "Seek +5s / -5s  or  +30s / -30s"),
+                ("+ - / M", "Volume +5% / -5% (0-130%) / Mute toggle"),
                 ("s / m", "Toggle Shuffle / Cycle Repeat (off -> all -> one)"),
                 ("Enter / p", "Play or Open / Play entity directly"),
                 ("N / a", "Play Next (priority) / Append to queue"),
                 (
-                    "P / f / w",
-                    "Add to Playlist / Like-Unlike / Save-Unsave Album·Artist·Playlist",
+                    "P / f / w / W",
+                    "Add to Playlist / Like / Save item / Follow Artist",
                 ),
                 (
-                    "r / o / v / c",
-                    "Start Radio / Cycle Sort / Grid-List / Cover Size (or Create Playlist)",
+                    "r / x / i / o",
+                    "Start Radio / Artist Shuffle / Artist Bio / Cycle Sort",
                 ),
-                ("dd / Del", "Remove track or delete playlist (with confirm)"),
+                ("c / dd / Del", "Create playlist / Remove or delete item"),
                 (
                     "J / K (Shift)",
                     "Reorder track down / up (Queue & User Playlists)",
@@ -379,7 +452,10 @@ pub fn render_modal(
                     "R / I / E / U",
                     "Playlists: Rename / Import URL / Export JSON+M3U8 / Upload to YTM",
                 ),
-                ("yy / Backspace / q", "Copy YTM URL / Go Back / Clean Quit"),
+                (
+                    "yy / Y / Bksp / q",
+                    "Copy item URL / Copy collection URL / Back / Quit",
+                ),
             ];
 
             let max_scroll = entries.len().saturating_sub(usize::from(inner.height));
@@ -429,7 +505,7 @@ fn render_text_prompt(
     area: Rect,
     title: &str,
     prompt: &str,
-    input: &str,
+    input: &TextInput,
     hint: &str,
 ) {
     let rect = centered_rect(64, 8, area);
@@ -438,22 +514,20 @@ fn render_text_prompt(
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
+    let text_budget = usize::from(inner.width.saturating_sub(3)).max(4);
+    let mut input_spans = vec![Span::styled(
+        "› ",
+        Style::default().fg(ACCENT).bg(Color::Reset),
+    )];
+    input_spans.extend(input.render_spans(text_budget, true, ""));
+
     let lines = vec![
         Line::from(Span::styled(
             prompt,
             Style::default().fg(DIM).bg(Color::Reset),
         )),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("› ", Style::default().fg(ACCENT).bg(Color::Reset)),
-            Span::styled(
-                format!("{input}█"),
-                Style::default()
-                    .fg(TEXT)
-                    .bg(CURSOR_BG)
-                    .add_modifier(Modifier::BOLD),
-            ),
-        ]),
+        Line::from(input_spans),
     ];
     frame.render_widget(Paragraph::new(lines), inner);
 }

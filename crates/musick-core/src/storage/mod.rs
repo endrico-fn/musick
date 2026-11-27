@@ -355,4 +355,10 @@ impl UserStore {
         )?;
         Ok(())
     }
+
+    pub fn delete_kv(&self, key: &str) -> CoreResult<()> {
+        let conn = self.lock_conn()?;
+        conn.execute("DELETE FROM kv_state WHERE key = ?1", [key])?;
+        Ok(())
+    }
 }

@@ -5,12 +5,13 @@ mod linux_impl {
 
     use mpris_server::{
         LoopStatus, Metadata, PlaybackRate, PlaybackStatus, PlayerInterface, Property,
-        RootInterface, Server, Time, TrackId, Volume, zbus::fdo,
+        RootInterface, Server, Signal, Time, TrackId, Volume, zbus::fdo,
     };
+    use tokio::sync::broadcast;
     use tokio::task::JoinHandle;
     use tracing::debug;
 
-    use musick_core::{AppCommand, PlaybackSnapshot, RepeatMode};
+    use musick_core::{AppCommand, PlaybackSnapshot, PlayerEvent, RepeatMode};
 
     use crate::engine::PlayerEngineHandle;
 
@@ -149,7 +150,7 @@ mod linux_impl {
         }
 
         async fn stop(&self) -> fdo::Result<()> {
-            self.engine.send(AppCommand::ClearQueue).await;
+            self.engine.send(AppCommand::StopPlayback).await;
             Ok(())
         }
 
@@ -318,32 +319,52 @@ mod linux_impl {
                 };
 
                 let mut snap_rx = engine.snapshot_rx.clone();
+                let mut ev_rx = engine.subscribe_events();
                 let mut prev = snap_rx.borrow().clone();
-                while snap_rx.changed().await.is_ok() {
-                    let cur = snap_rx.borrow().clone();
-                    let mut changed = Vec::new();
-                    if cur.playing != prev.playing
-                        || cur.paused != prev.paused
-                        || cur.track.is_some() != prev.track.is_some()
-                    {
-                        changed.push(Property::PlaybackStatus(playback_status_for(&cur)));
+                loop {
+                    tokio::select! {
+                        res = snap_rx.changed() => {
+                            if res.is_err() {
+                                break;
+                            }
+                            let cur = snap_rx.borrow().clone();
+                            let mut changed = Vec::new();
+                            if cur.playing != prev.playing
+                                || cur.paused != prev.paused
+                                || cur.track.is_some() != prev.track.is_some()
+                            {
+                                changed.push(Property::PlaybackStatus(playback_status_for(&cur)));
+                            }
+                            if cur.track_rev != prev.track_rev {
+                                changed.push(Property::Metadata(build_metadata(&cur)));
+                            }
+                            if cur.volume != prev.volume {
+                                changed.push(Property::Volume(f64::from(cur.volume) / 100.0));
+                            }
+                            if cur.shuffle != prev.shuffle {
+                                changed.push(Property::Shuffle(cur.shuffle));
+                            }
+                            if cur.repeat != prev.repeat {
+                                changed.push(Property::LoopStatus(loop_status_for(cur.repeat)));
+                            }
+                            if !changed.is_empty() {
+                                let _ = server.properties_changed(changed).await;
+                            }
+                            prev = cur;
+                        }
+                        ev = ev_rx.recv() => {
+                            match ev {
+                                Ok(PlayerEvent::Seeked { position_secs }) => {
+                                    let position = Time::from_micros(
+                                        (position_secs.max(0.0) * 1_000_000.0) as i64,
+                                    );
+                                    let _ = server.emit(Signal::Seeked { position }).await;
+                                }
+                                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
                     }
-                    if cur.track_rev != prev.track_rev {
-                        changed.push(Property::Metadata(build_metadata(&cur)));
-                    }
-                    if cur.volume != prev.volume {
-                        changed.push(Property::Volume(f64::from(cur.volume) / 100.0));
-                    }
-                    if cur.shuffle != prev.shuffle {
-                        changed.push(Property::Shuffle(cur.shuffle));
-                    }
-                    if cur.repeat != prev.repeat {
-                        changed.push(Property::LoopStatus(loop_status_for(cur.repeat)));
-                    }
-                    if !changed.is_empty() {
-                        let _ = server.properties_changed(changed).await;
-                    }
-                    prev = cur;
                 }
             });
             Self { task }

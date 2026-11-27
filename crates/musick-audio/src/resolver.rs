@@ -1,16 +1,16 @@
-use std::collections::{HashMap, VecDeque};
+use std::num::NonZeroUsize;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use lru::LruCache;
 use tokio::process::Command;
-use tokio::sync::watch;
 use tracing::debug;
 
 #[cfg(feature = "fast-resolver")]
 use musick_core::ensure_private_dir;
-use musick_core::{AppPaths, AudioQuality};
+use musick_core::{AppPaths, AudioQuality, SingleFlight, is_valid_video_id};
 
 use crate::error::{AudioError, AudioResult};
 
@@ -74,7 +74,7 @@ impl ResolvedStream {
     }
 }
 
-/// Extract `expire=` unix timestamp from googlevideo URLs minus 120s safety margin (30s floor).
+/// extract `expire=` unix timestamp from googlevideo urls minus 120s safety margin (30s floor)
 pub fn parse_stream_expiry(url: &str, now_secs: f64, default_ttl_secs: f64) -> f64 {
     if let Ok(parsed) = url::Url::parse(url) {
         for (k, v) in parsed.query_pairs() {
@@ -128,6 +128,11 @@ impl RustyPipeBackend {
 #[async_trait]
 impl StreamBackend for RustyPipeBackend {
     async fn resolve(&self, video_id: &str, quality: AudioQuality) -> AudioResult<RawStream> {
+        if !is_valid_video_id(video_id) {
+            return Err(AudioError::Resolver(format!(
+                "Invalid video ID: {video_id}"
+            )));
+        }
         let player = self
             .client
             .query()
@@ -259,6 +264,11 @@ fn quality_profile(quality: AudioQuality) -> (&'static str, &'static str) {
 #[async_trait]
 impl StreamBackend for YtDlpBackend {
     async fn resolve(&self, video_id: &str, quality: AudioQuality) -> AudioResult<RawStream> {
+        if !is_valid_video_id(video_id) {
+            return Err(AudioError::Resolver(format!(
+                "Invalid video ID: {video_id}"
+            )));
+        }
         let target = format!("https://music.youtube.com/watch?v={video_id}");
         let (fmt, sort_spec) = quality_profile(quality);
 
@@ -360,69 +370,12 @@ struct CircuitState {
     cooldown_until: f64,
 }
 
-#[derive(Default)]
-struct StreamLru {
-    map: HashMap<String, ResolvedStream>,
-    order: VecDeque<String>,
-}
-
-impl StreamLru {
-    fn get(&mut self, key: &str) -> Option<ResolvedStream> {
-        let hit = self.map.get(key).cloned()?;
-        self.touch(key);
-        Some(hit)
-    }
-
-    fn insert(&mut self, key: String, val: ResolvedStream) {
-        self.map.insert(key.clone(), val);
-        self.touch(&key);
-        while self.map.len() > MAX_RESOLVED_STREAMS {
-            if let Some(oldest) = self.order.pop_front() {
-                self.map.remove(&oldest);
-            } else {
-                break;
-            }
-        }
-    }
-
-    fn remove(&mut self, key: &str) {
-        self.map.remove(key);
-        self.order.retain(|k| k != key);
-    }
-
-    fn clear(&mut self) {
-        self.map.clear();
-        self.order.clear();
-    }
-
-    fn touch(&mut self, key: &str) {
-        self.order.retain(|k| k != key);
-        self.order.push_back(key.to_string());
-    }
-}
-
-type ResolverOutcome = Option<Result<ResolvedStream, String>>;
-type ResolverInflightMap = Mutex<HashMap<String, watch::Receiver<ResolverOutcome>>>;
-
-struct ResolverInflightGuard<'a> {
-    map: &'a ResolverInflightMap,
-    key: String,
-}
-
-impl Drop for ResolverInflightGuard<'_> {
-    fn drop(&mut self) {
-        if let Ok(mut guard) = self.map.lock() {
-            guard.remove(&self.key);
-        }
-    }
-}
-
 pub struct HybridStreamResolver {
     fast: Option<Arc<dyn StreamBackend>>,
     fallback: Arc<dyn StreamBackend>,
     quality: RwLock<AudioQuality>,
-    cache: Mutex<StreamLru>,
-    inflight: ResolverInflightMap,
+    cache: Mutex<LruCache<String, ResolvedStream>>,
+    inflight: SingleFlight<String, Result<ResolvedStream, String>>,
     circuit: Mutex<CircuitState>,
     clock: Arc<dyn Fn() -> f64 + Send + Sync>,
 }
@@ -453,12 +406,13 @@ impl HybridStreamResolver {
         quality: AudioQuality,
         clock: Arc<dyn Fn() -> f64 + Send + Sync>,
     ) -> Self {
+        let cap = NonZeroUsize::new(MAX_RESOLVED_STREAMS).unwrap_or(NonZeroUsize::MIN);
         Self {
             fast,
             fallback,
             quality: RwLock::new(quality),
-            cache: Mutex::new(StreamLru::default()),
-            inflight: Mutex::new(HashMap::new()),
+            cache: Mutex::new(LruCache::new(cap)),
+            inflight: SingleFlight::new(),
             circuit: Mutex::new(CircuitState::default()),
             clock,
         }
@@ -487,9 +441,9 @@ impl HybridStreamResolver {
         let now = (self.clock)();
         let quality = self.audio_quality();
         let mut cache = self.cache.lock().ok()?;
-        let hit = cache.get(video_id)?;
+        let hit = cache.get(video_id).cloned()?;
         if hit.quality != quality || now >= hit.expires_at {
-            cache.remove(video_id);
+            cache.pop(video_id);
             return None;
         }
         Some(hit)
@@ -497,13 +451,11 @@ impl HybridStreamResolver {
 
     pub fn invalidate(&self, video_id: &str) {
         if let Ok(mut cache) = self.cache.lock() {
-            cache.remove(video_id);
+            cache.pop(video_id);
         }
     }
 
-    /// Record a playback failure (e.g. mpv HTTP 403 / loading failed) for a previously resolved URL.
-    /// Evicts the broken entry and immediately opens the fast-path circuit breaker when the URL
-    /// originated from the fast-path backend so the retry routes straight to `yt-dlp`.
+    /// evict broken stream url and trip fast-path circuit breaker if applicable
     pub fn report_playback_failure(&self, video_id: &str, was_fast_path: bool) {
         self.invalidate(video_id);
         if was_fast_path && let Ok(mut cb) = self.circuit.lock() {
@@ -530,7 +482,7 @@ impl HybridStreamResolver {
         self.resolve_inner(video_id, false).await
     }
 
-    /// Resolve strictly via the fallback backend (`yt-dlp`), bypassing fast-path and cache.
+    /// resolve strictly via fallback backend, bypassing fast-path and cache
     pub async fn resolve_fallback_only(&self, video_id: &str) -> AudioResult<ResolvedStream> {
         self.invalidate(video_id);
         self.resolve_inner(video_id, true).await
@@ -545,73 +497,27 @@ impl HybridStreamResolver {
             return Ok(cached);
         }
 
-        // Lossless single-flight deduplication via `watch` channel + RAII drop guard:
-        // zero lost wakeups and guaranteed cleanup if the leader future is cancelled.
         let inflight_key = if force_fallback {
             format!("fb:{video_id}")
         } else {
             video_id.to_string()
         };
-        let leader_tx = loop {
-            enum Slot {
-                Leader(watch::Sender<ResolverOutcome>),
-                Waiter(watch::Receiver<ResolverOutcome>),
-            }
 
-            let slot = {
-                let mut map = self
-                    .inflight
-                    .lock()
-                    .map_err(|_| AudioError::Resolver("Resolver inflight lock poisoned".into()))?;
-                if let Some(existing) = map.get(&inflight_key) {
-                    Slot::Waiter(existing.clone())
-                } else {
-                    let (tx, rx) = watch::channel(None);
-                    map.insert(inflight_key.clone(), rx);
-                    Slot::Leader(tx)
+        self.inflight
+            .run(inflight_key, || async {
+                if !force_fallback && let Some(cached) = self.get_cached(video_id) {
+                    return Ok(cached);
                 }
-            };
-
-            match slot {
-                Slot::Leader(tx) => break tx,
-                Slot::Waiter(mut rx) => {
-                    if let Some(done) = rx.borrow().clone() {
-                        return done.map_err(AudioError::Resolver);
-                    }
-                    if rx.changed().await.is_ok()
-                        && let Some(done) = rx.borrow().clone()
-                    {
-                        return done.map_err(AudioError::Resolver);
-                    }
-                    if !force_fallback && let Some(cached) = self.get_cached(video_id) {
-                        return Ok(cached);
-                    }
-                    // Leader was cancelled before publishing; loop to become leader.
-                }
-            }
-        };
-
-        let _guard = ResolverInflightGuard {
-            map: &self.inflight,
-            key: inflight_key,
-        };
-
-        let result = self.resolve_uncached(video_id, force_fallback).await;
-        let outcome = match &result {
-            Ok(stream) => Ok(stream.clone()),
-            Err(err) => Err(err.to_string()),
-        };
-        let _ = leader_tx.send(Some(outcome));
-        result
+                self.resolve_uncached(video_id, force_fallback)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(AudioError::Resolver)
     }
 
     pub fn prefetch(self: &Arc<Self>, video_id: String) {
-        if self.get_cached(&video_id).is_some() {
-            return;
-        }
-        if let Ok(map) = self.inflight.lock()
-            && map.contains_key(&video_id)
-        {
+        if self.get_cached(&video_id).is_some() || self.inflight.is_inflight(&video_id) {
             return;
         }
         let resolver = self.clone();
@@ -673,7 +579,7 @@ impl HybridStreamResolver {
         };
 
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(video_id.to_string(), resolved.clone());
+            cache.put(video_id.to_string(), resolved.clone());
         }
         Ok(resolved)
     }

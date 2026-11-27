@@ -19,13 +19,16 @@ pub struct PlaybackSnapshot {
     pub resolving: bool,
     pub restored: bool,
     pub volume: u8,
+    pub muted: bool,
     pub shuffle: bool,
     pub repeat: RepeatMode,
     pub autoplay_active: bool,
     pub normalize_audio: bool,
     pub upcoming_count: usize,
     pub show_translation: bool,
+    pub loading_lyrics: bool,
     pub translating_lyrics: bool,
+    pub lyrics_offset_secs: f64,
     pub audio_info: String,
     pub error: Option<String>,
     pub track_rev: u64,
@@ -42,13 +45,16 @@ impl Default for PlaybackSnapshot {
             resolving: false,
             restored: false,
             volume: 80,
+            muted: false,
             shuffle: false,
             repeat: RepeatMode::Off,
             autoplay_active: false,
             normalize_audio: false,
             upcoming_count: 0,
             show_translation: false,
+            loading_lyrics: false,
             translating_lyrics: false,
+            lyrics_offset_secs: 0.0,
             audio_info: String::new(),
             error: None,
             track_rev: 0,
@@ -89,7 +95,16 @@ pub enum AppCommand {
     RestoreTrack {
         track: Track,
     },
+    RestoreSession {
+        tracks: Vec<Track>,
+        index: usize,
+        position_secs: f64,
+        shuffle: bool,
+        repeat: RepeatMode,
+    },
+    StopPlayback,
     TogglePause,
+    ToggleMute,
     Next,
     Previous,
     SeekRelative {
@@ -97,6 +112,9 @@ pub enum AppCommand {
     },
     SeekAbsolute {
         seconds: f64,
+    },
+    AdjustLyricsOffset {
+        delta_secs: f64,
     },
     SetVolume {
         volume: u8,
@@ -138,6 +156,9 @@ pub enum PlayerEvent {
     Lyrics {
         track_video_id: Option<String>,
         lyrics: Lyrics,
+    },
+    Seeked {
+        position_secs: f64,
     },
     StatusToast(String),
 }

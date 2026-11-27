@@ -309,7 +309,7 @@ pub fn clear_search_history(conn: &Connection) -> CoreResult<()> {
 
 // ── Account Isolation on Logout / Account Switch ────────────────────────────
 
-/// Purge all remote-scoped synced data for `account_key` while strictly preserving `'local'` data.
+/// purge remote-scoped synced data for `account_key` while keeping `'local'` data intact
 pub fn purge_account(conn: &mut Connection, account_key: &str) -> CoreResult<()> {
     if account_key.trim().is_empty() || account_key == "local" {
         return Ok(());

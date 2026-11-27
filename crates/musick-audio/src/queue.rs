@@ -16,7 +16,7 @@ struct UndoEntry {
     priority_count: usize,
 }
 
-/// Two-tier playback queue preserving priority "Next Up" tracks over context tracks.
+/// two-tier playback queue preserving priority next-up tracks over context tracks
 pub struct PlayQueue {
     rng: SmallRng,
     items: Vec<Track>,
@@ -219,6 +219,27 @@ impl PlayQueue {
         } else {
             self.items = tracks;
             self.index = Some(start);
+        }
+        self.current().cloned()
+    }
+
+    pub fn restore_session(
+        &mut self,
+        tracks: Vec<Track>,
+        index: usize,
+        shuffle: bool,
+        repeat: RepeatMode,
+    ) -> Option<Track> {
+        self.original = tracks.clone();
+        self.items = tracks;
+        self.shuffle = shuffle;
+        self.repeat = repeat;
+        self.priority_count = 0;
+        self.undo_stack.clear();
+        if self.items.is_empty() {
+            self.index = None;
+        } else {
+            self.index = Some(index.min(self.items.len() - 1));
         }
         self.current().cloned()
     }

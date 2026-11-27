@@ -20,17 +20,24 @@ fast-resolver = ["musick-audio/fast-resolver"]
 base64.workspace = true
 clap.workspace = true
 crossterm.workspace = true
+hex.workspace = true
 image.workspace = true
+lru.workspace = true
 musick-audio = { path = "../musick-audio", default-features = false }
 musick-core = { path = "../musick-core" }
 ratatui.workspace = true
 ratatui-image.workspace = true
-serde.workspace = true
+reqwest.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio.workspace = true
-tracing.workspace = true
 tracing-subscriber.workspace = true
 unicode-width.workspace = true
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/musick-{ target }.tar.gz"
+bin-dir = "musick"
+pkg-fmt = "tgz"
 
 [dev-dependencies]
 async-trait.workspace = true

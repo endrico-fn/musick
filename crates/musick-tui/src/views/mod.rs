@@ -1,7 +1,8 @@
 pub mod album;
 pub mod artist;
-pub mod home;
+pub mod detail_hero;
 pub mod library;
+pub mod player;
 pub mod playlist_detail;
 pub mod playlists;
 pub mod queue;
@@ -17,13 +18,13 @@ use crate::theme::IconSet;
 use crate::widgets::{ActiveModal, BrailleSpinner};
 
 pub use album::AlbumView;
-pub use artist::{ArtistTab, ArtistView};
-pub use home::{HomeDiscoverTab, HomeFocusPane, HomePanelMode, HomeView};
+pub use artist::{ArtistOverviewPane, ArtistTab, ArtistView};
 pub use library::{LibraryTab, LibraryView};
+pub use player::{DiscoverTab, PlayerFocusPane, PlayerPanelMode, PlayerView};
 pub use playlist_detail::PlaylistDetailView;
 pub use playlists::{PlaylistsPane, PlaylistsView};
 pub use queue::QueueView;
-pub use settings::SettingsView;
+pub use settings::{SettingRow, SettingsView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TrackSortMode {
@@ -50,8 +51,7 @@ impl TrackSortMode {
         }
     }
 
-    /// Filter tracks by title or artist name and sort while preserving each
-    /// track's true original index in `tracks`.
+    /// filter and sort tracks while preserving each track's original index
     pub fn apply<'a>(self, tracks: &'a [Track], filter_query: &str) -> Vec<(usize, &'a Track)> {
         let q = filter_query.trim().to_lowercase();
         let mut items: Vec<(usize, &'a Track)> = tracks
@@ -139,7 +139,7 @@ pub enum ViewEffect {
     TriggerAutocomplete {
         query: String,
     },
-    RefreshHome,
+    RefreshDiscover,
     OpenModal(ActiveModal),
     SyncNow,
     ToggleLike(Track),

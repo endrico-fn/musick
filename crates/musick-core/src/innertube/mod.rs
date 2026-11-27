@@ -1,18 +1,20 @@
+mod artist_api;
+mod catalog;
 pub mod endpoints;
 pub mod extract;
+mod library_api;
 pub mod parsers;
+mod telemetry;
 
-use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use serde_json::{Value, json};
-use tracing::debug;
 
 use crate::auth::AuthManager;
 use crate::domain::{
-    Album, AlbumSummary, Artist, ArtistRef, ArtistSummary, HomeFeed, Lyrics, Playlist,
-    PlaylistSummary, SearchCategory, SearchItem, Track, search_item_key,
+    Album, AlbumSummary, Artist, ArtistSummary, DiscoverFeed, Lyrics, Playlist, PlaylistSummary,
+    SearchCategory, SearchItem, Track,
 };
 use crate::error::{CoreError, CoreResult};
 use crate::storage::CacheManager;
@@ -25,7 +27,7 @@ pub use endpoints::{
 #[async_trait]
 pub trait CatalogApi: Send + Sync {
     fn set_region(&self, _region: &str) {}
-    async fn home_feed(&self, region: &str) -> CoreResult<HomeFeed>;
+    async fn discover_feed(&self, region: &str) -> CoreResult<DiscoverFeed>;
     async fn search(
         &self,
         category: SearchCategory,
@@ -37,11 +39,14 @@ pub trait CatalogApi: Send + Sync {
     async fn artist_releases(
         &self,
         browse_id: &str,
-        params: &str,
+        params: Option<&str>,
         kind: &str,
     ) -> CoreResult<Vec<AlbumSummary>>;
     async fn album(&self, browse_id: &str) -> CoreResult<Album>;
     async fn playlist(&self, playlist_id: &str, limit: usize) -> CoreResult<Playlist>;
+    async fn playlist_uncached(&self, playlist_id: &str, limit: usize) -> CoreResult<Playlist> {
+        self.playlist(playlist_id, limit).await
+    }
     async fn radio(
         &self,
         video_id: Option<&str>,
@@ -52,13 +57,11 @@ pub trait CatalogApi: Send + Sync {
     async fn song_related(&self, video_id: &str) -> CoreResult<Vec<SearchItem>>;
     async fn yt_lyrics(&self, video_id: &str) -> CoreResult<Option<Lyrics>>;
 
-    // ── Authenticated Library Read Endpoints ────────────────────────────────
     async fn library_playlists(&self) -> CoreResult<Vec<PlaylistSummary>>;
     async fn library_liked_songs(&self, limit: usize) -> CoreResult<Vec<Track>>;
     async fn library_albums(&self) -> CoreResult<Vec<AlbumSummary>>;
     async fn library_artists(&self) -> CoreResult<Vec<ArtistSummary>>;
 
-    // ── Authenticated 2-Way Sync Write Endpoints ────────────────────────────
     async fn create_playlist(
         &self,
         title: &str,
@@ -76,7 +79,6 @@ pub trait CatalogApi: Send + Sync {
     async fn set_album_library_status(&self, browse_id: &str, save: bool) -> CoreResult<()>;
     async fn set_playlist_library_status(&self, playlist_id: &str, save: bool) -> CoreResult<()>;
 
-    // ── Strictly Opt-In Algorithm Playback Telemetry ────────────────────────
     async fn fetch_playback_tracking(
         &self,
         video_id: &str,
@@ -92,9 +94,9 @@ pub trait CatalogApi: Send + Sync {
 }
 
 pub struct InnerTubeClient {
-    http: reqwest::Client,
-    auth: Arc<AuthManager>,
-    cache: Arc<CacheManager>,
+    pub(super) http: reqwest::Client,
+    pub(super) auth: Arc<AuthManager>,
+    pub(super) cache: Arc<CacheManager>,
     region: RwLock<String>,
     base_url: String,
 }
@@ -133,7 +135,7 @@ impl InnerTubeClient {
             .unwrap_or_else(|_| "ID".to_string())
     }
 
-    fn cache_scope(&self) -> String {
+    pub(super) fn cache_scope(&self) -> String {
         format!("{}:{}", self.region(), self.auth.account_key())
     }
 
@@ -150,7 +152,7 @@ impl InnerTubeClient {
         Value::Object(payload)
     }
 
-    async fn post_json(
+    pub(super) async fn post_json(
         &self,
         endpoint: &str,
         client_kind: ClientKind,
@@ -179,16 +181,16 @@ impl InnerTubeClient {
             req = req.header("X-Goog-Visitor-Id", vd);
         }
 
-        // Strict privacy boundary: AuthManager::apply_headers is a no-op in Anonymous mode.
+        // strict privacy boundary: apply_headers is a no-op in anonymous mode
         req = self.auth.apply_headers(req).await?;
         let resp = req.json(&body).send().await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let txt = resp.text().await.unwrap_or_default();
+            let snippet: String = txt.chars().take(200).collect();
             return Err(CoreError::Catalog(format!(
-                "InnerTube {endpoint} HTTP {status}: {}",
-                &txt[..txt.len().min(200)]
+                "InnerTube {endpoint} HTTP {status}: {snippet}"
             )));
         }
 
@@ -199,7 +201,7 @@ impl InnerTubeClient {
         Ok(json_val)
     }
 
-    async fn browse(
+    pub(super) async fn browse(
         &self,
         browse_id: &str,
         params: Option<&str>,
@@ -220,7 +222,7 @@ impl InnerTubeClient {
             .await
     }
 
-    fn require_auth(&self, action: &str) -> CoreResult<()> {
+    pub(super) fn require_auth(&self, action: &str) -> CoreResult<()> {
         if !self.auth.is_authenticated() {
             return Err(CoreError::Auth(format!(
                 "{action} requires OAuth or Browser authentication"
@@ -236,62 +238,8 @@ impl CatalogApi for InnerTubeClient {
         InnerTubeClient::set_region(self, region);
     }
 
-    async fn home_feed(&self, region: &str) -> CoreResult<HomeFeed> {
-        let cache_key = format!("home:{region}:{}", self.auth.account_key());
-        if let Some(cached) = self.cache.get_catalog::<HomeFeed>(&cache_key) {
-            return Ok(cached);
-        }
-
-        let (home_res, new_rel_res, explore_res, charts_res) = tokio::join!(
-            self.browse(
-                "FEmusic_home",
-                None,
-                None,
-                ClientKind::WebRemix,
-                Some(region)
-            ),
-            self.browse(
-                "FEmusic_new_releases",
-                None,
-                None,
-                ClientKind::WebRemix,
-                Some(region),
-            ),
-            self.browse(
-                "FEmusic_explore",
-                None,
-                None,
-                ClientKind::WebRemix,
-                Some(region),
-            ),
-            self.browse(
-                "FEmusic_charts",
-                None,
-                None,
-                ClientKind::WebRemix,
-                Some(region),
-            ),
-        );
-
-        let home_v = home_res.ok();
-        let new_rel_v = new_rel_res.ok();
-        let explore_v = explore_res.ok();
-        let charts_v = charts_res.ok();
-
-        if home_v.is_none() && new_rel_v.is_none() && explore_v.is_none() && charts_v.is_none() {
-            return Err(CoreError::Catalog(
-                "Unable to load YouTube Music home/explore feeds".into(),
-            ));
-        }
-
-        let feed = parsers::parse_home_feed(
-            home_v.as_ref(),
-            new_rel_v.as_ref(),
-            explore_v.as_ref(),
-            charts_v.as_ref(),
-        );
-        self.cache.put_catalog(&cache_key, &feed, Some(600));
-        Ok(feed)
+    async fn discover_feed(&self, region: &str) -> CoreResult<DiscoverFeed> {
+        self.discover_feed_impl(region).await
     }
 
     async fn search(
@@ -300,398 +248,36 @@ impl CatalogApi for InnerTubeClient {
         query: &str,
         limit: usize,
     ) -> CoreResult<Vec<SearchItem>> {
-        let q = query.trim();
-        if q.is_empty() {
-            return Ok(Vec::new());
-        }
-        let cache_key = format!(
-            "search:{}:{}:{}:{limit}",
-            self.cache_scope(),
-            category.as_str(),
-            q.to_lowercase()
-        );
-        if let Some(cached) = self.cache.get_catalog::<Vec<SearchItem>>(&cache_key) {
-            return Ok(cached);
-        }
-
-        let out = if category == SearchCategory::All {
-            let mut map_all = serde_json::Map::new();
-            map_all.insert("query".into(), json!(q));
-            let mut map_songs = serde_json::Map::new();
-            map_songs.insert("query".into(), json!(q));
-            if let Some(p) = search_filter_params(SearchCategory::Songs) {
-                map_songs.insert("params".into(), json!(p));
-            }
-
-            let (res_all, res_songs) = tokio::join!(
-                self.post_json("search", ClientKind::WebRemix, None, map_all),
-                self.post_json("search", ClientKind::WebRemix, None, map_songs),
-            );
-
-            if res_songs.is_err()
-                && let Err(e) = res_all
-            {
-                return Err(e);
-            }
-
-            let parsed_all = res_all
-                .map(|v| parsers::parse_search_results(&v))
-                .unwrap_or_default();
-            let parsed_songs = res_songs
-                .map(|v| parsers::parse_search_results(&v))
-                .unwrap_or_default();
-
-            let song_by_vid: HashMap<String, Track> = parsed_songs
-                .iter()
-                .filter_map(|it| match it {
-                    SearchItem::Track(t) => Some((t.video_id.clone(), t.clone())),
-                    _ => None,
-                })
-                .collect();
-
-            let mut merged = Vec::new();
-            let mut seen: HashSet<(&'static str, String)> = HashSet::new();
-            for item in parsed_all.into_iter().chain(parsed_songs) {
-                let upgraded = match item {
-                    SearchItem::Track(mut tr) => {
-                        if let Some(song) = song_by_vid.get(&tr.video_id)
-                            && ((tr.album.is_none() && song.album.is_some())
-                                || song.video_type.as_deref() == Some("MUSIC_VIDEO_TYPE_ATV"))
-                        {
-                            if !song.title.is_empty() {
-                                tr.title = song.title.clone();
-                            }
-                            if !song.artists.is_empty() {
-                                tr.artists = song.artists.clone();
-                            }
-                            if song.album.is_some() {
-                                tr.album = song.album.clone();
-                            }
-                            if song.album_id.is_some() {
-                                tr.album_id = song.album_id.clone();
-                            }
-                            if song.duration.is_some() {
-                                tr.duration = song.duration;
-                            }
-                            if !song.thumbs.is_empty() {
-                                tr.thumbs = song.thumbs.clone();
-                            }
-                            if tr.plays.is_none() {
-                                tr.plays = song.plays.clone();
-                            }
-                            if song.video_type.is_some() {
-                                tr.video_type = song.video_type.clone();
-                            }
-                        }
-                        SearchItem::Track(tr)
-                    }
-                    other => other,
-                };
-                let (k, id) = search_item_key(&upgraded);
-                if seen.insert((k, id.to_string())) {
-                    merged.push(upgraded);
-                }
-            }
-            merged
-        } else {
-            let mut map = serde_json::Map::new();
-            map.insert("query".into(), json!(q));
-            if let Some(p) = search_filter_params(category) {
-                map.insert("params".into(), json!(p));
-            }
-            let raw = self
-                .post_json("search", ClientKind::WebRemix, None, map)
-                .await?;
-            parsers::parse_search_results(&raw)
-        };
-
-        let capped: Vec<SearchItem> = out.into_iter().take(limit).collect();
-        self.cache.put_catalog(&cache_key, &capped, Some(600));
-        Ok(capped)
+        self.search_impl(category, query, limit).await
     }
 
     async fn suggestions(&self, query: &str) -> CoreResult<Vec<String>> {
-        let q = query.trim();
-        if q.is_empty() {
-            return Ok(Vec::new());
-        }
-        let cache_key = format!("sugg:{}:{}", self.region(), q.to_lowercase());
-        if let Some(cached) = self.cache.get_catalog::<Vec<String>>(&cache_key) {
-            return Ok(cached);
-        }
-
-        let mut map = serde_json::Map::new();
-        map.insert("input".into(), json!(q));
-        let raw = self
-            .post_json(
-                "music/get_search_suggestions",
-                ClientKind::WebRemix,
-                None,
-                map,
-            )
-            .await?;
-        let sug = parsers::parse_suggestions(&raw);
-        self.cache.put_catalog(&cache_key, &sug, Some(300));
-        Ok(sug)
+        self.suggestions_impl(query).await
     }
 
     async fn artist(&self, browse_id: &str) -> CoreResult<Artist> {
-        let clean_bid = browse_id.strip_prefix("MPLA").unwrap_or(browse_id);
-        let cache_key = format!("artist:{}:{clean_bid}", self.region());
-        if let Some(cached) = self.cache.get_catalog::<Artist>(&cache_key) {
-            return Ok(cached);
-        }
-
-        let raw = self
-            .browse(clean_bid, None, None, ClientKind::WebRemix, None)
-            .await?;
-        let mut art = parsers::parse_artist(clean_bid, &raw);
-        let mut plays_map = parsers::extract_plays_from_browse(&raw);
-
-        let songs_pl_id = art.songs_playlist_id.clone();
-        let videos_pl_id = art.videos_playlist_id.clone();
-        let albums_bid = art
-            .albums_browse_id
-            .clone()
-            .unwrap_or_else(|| clean_bid.to_string());
-        let albums_params = art.albums_params.clone();
-        let singles_bid = art
-            .singles_browse_id
-            .clone()
-            .unwrap_or_else(|| clean_bid.to_string());
-        let singles_params = art.singles_params.clone();
-
-        let (songs_pl, videos_pl, full_albums, full_singles) = tokio::join!(
-            async {
-                if let Some(pid) = songs_pl_id.as_deref() {
-                    self.playlist(pid, 150).await.ok()
-                } else {
-                    None
-                }
-            },
-            async {
-                if let Some(pid) = videos_pl_id.as_deref() {
-                    self.playlist(pid, 100).await.ok()
-                } else {
-                    None
-                }
-            },
-            async {
-                if let Some(params) = albums_params.as_deref() {
-                    self.artist_releases(&albums_bid, params, "Album")
-                        .await
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                }
-            },
-            async {
-                if let Some(params) = singles_params.as_deref() {
-                    self.artist_releases(&singles_bid, params, "Single")
-                        .await
-                        .unwrap_or_default()
-                } else {
-                    Vec::new()
-                }
-            },
-        );
-
-        let fallback_artists = vec![ArtistRef {
-            name: art.summary.name.clone(),
-            id: Some(clean_bid.to_string()),
-        }];
-
-        if let Some(pl) = songs_pl
-            && !pl.tracks.is_empty()
-        {
-            for t in &pl.tracks {
-                if let Some(p) = &t.plays {
-                    plays_map
-                        .entry(t.video_id.clone())
-                        .or_insert_with(|| p.clone());
-                }
-            }
-            let orig_map: HashMap<String, Track> = art
-                .songs
-                .iter()
-                .map(|t| (t.video_id.clone(), t.clone()))
-                .collect();
-            let mut seen = HashSet::new();
-            let mut enriched = Vec::new();
-            for mut t in pl.tracks {
-                seen.insert(t.video_id.clone());
-                if let Some(orig) = orig_map.get(&t.video_id) {
-                    if t.artists.is_empty() {
-                        t.artists = orig.artists.clone();
-                    }
-                    if t.album.is_none() {
-                        t.album = orig.album.clone();
-                    }
-                    if t.album_id.is_none() {
-                        t.album_id = orig.album_id.clone();
-                    }
-                    if t.duration.is_none() {
-                        t.duration = orig.duration;
-                    }
-                    if t.thumbs.is_empty() {
-                        t.thumbs = orig.thumbs.clone();
-                    }
-                    if t.plays.is_none() {
-                        t.plays = orig.plays.clone();
-                    }
-                    if t.video_type.is_none() {
-                        t.video_type = orig.video_type.clone();
-                    }
-                }
-                if t.artists.is_empty() {
-                    t.artists = fallback_artists.clone();
-                }
-                if let Some(p) = plays_map.get(&t.video_id) {
-                    t.plays = Some(p.clone());
-                }
-                enriched.push(t);
-            }
-            for mut orig in art.songs {
-                if seen.insert(orig.video_id.clone()) {
-                    if orig.artists.is_empty() {
-                        orig.artists = fallback_artists.clone();
-                    }
-                    if let Some(p) = plays_map.get(&orig.video_id) {
-                        orig.plays = Some(p.clone());
-                    }
-                    enriched.push(orig);
-                }
-            }
-            art.songs = enriched;
-        } else {
-            for t in &mut art.songs {
-                if t.artists.is_empty() {
-                    t.artists = fallback_artists.clone();
-                }
-                if let Some(p) = plays_map.get(&t.video_id) {
-                    t.plays = Some(p.clone());
-                }
-            }
-        }
-
-        if let Some(vpl) = videos_pl
-            && !vpl.tracks.is_empty()
-        {
-            let mut seen = HashSet::new();
-            let mut vids = Vec::new();
-            for mut t in vpl.tracks {
-                if seen.insert(t.video_id.clone()) {
-                    if t.artists.is_empty() {
-                        t.artists = fallback_artists.clone();
-                    }
-                    if t.video_type.is_none() {
-                        t.video_type = Some("MUSIC_VIDEO_TYPE_OMV".into());
-                    }
-                    vids.push(t);
-                }
-            }
-            for orig in art.videos {
-                if seen.insert(orig.video_id.clone()) {
-                    vids.push(orig);
-                }
-            }
-            art.videos = vids;
-        }
-
-        if !full_albums.is_empty() {
-            art.albums = full_albums;
-        }
-        for al in &mut art.albums {
-            if al.artists.is_empty() {
-                al.artists = fallback_artists.clone();
-            }
-        }
-
-        if !full_singles.is_empty() {
-            art.singles = full_singles;
-        }
-        for s in &mut art.singles {
-            if s.artists.is_empty() {
-                s.artists = fallback_artists.clone();
-            }
-        }
-
-        self.cache.put_catalog(&cache_key, &art, Some(1800));
-        Ok(art)
+        self.artist_impl(browse_id).await
     }
 
     async fn artist_releases(
         &self,
         browse_id: &str,
-        params: &str,
+        params: Option<&str>,
         kind: &str,
     ) -> CoreResult<Vec<AlbumSummary>> {
-        let cache_key = format!("releases:{}:{browse_id}:{params}", self.region());
-        if let Some(cached) = self.cache.get_catalog::<Vec<AlbumSummary>>(&cache_key) {
-            return Ok(cached);
-        }
-        let raw = self
-            .browse(browse_id, Some(params), None, ClientKind::WebRemix, None)
-            .await?;
-        let items = parsers::parse_artist_releases(&raw, kind);
-        self.cache.put_catalog(&cache_key, &items, Some(1800));
-        Ok(items)
+        self.artist_releases_impl(browse_id, params, kind).await
     }
 
     async fn album(&self, browse_id: &str) -> CoreResult<Album> {
-        let cache_key = format!("album:{}:{browse_id}", self.region());
-        if let Some(cached) = self.cache.get_catalog::<Album>(&cache_key) {
-            return Ok(cached);
-        }
-        let raw = self
-            .browse(browse_id, None, None, ClientKind::WebRemix, None)
-            .await?;
-        let album = parsers::parse_album(browse_id, &raw);
-        self.cache.put_catalog(&cache_key, &album, Some(1800));
-        Ok(album)
+        self.album_impl(browse_id).await
     }
 
     async fn playlist(&self, playlist_id: &str, limit: usize) -> CoreResult<Playlist> {
-        let clean_pid = playlist_id.strip_prefix("VL").unwrap_or(playlist_id);
-        let browse_pid = if clean_pid.starts_with("MP") {
-            clean_pid.to_string()
-        } else {
-            format!("VL{clean_pid}")
-        };
+        self.playlist_impl(playlist_id, limit).await
+    }
 
-        let raw = self
-            .browse(&browse_pid, None, None, ClientKind::WebRemix, None)
-            .await?;
-        let (mut pl, mut cont) = parsers::parse_playlist(clean_pid, &raw);
-
-        let mut pages = 0usize;
-        while pl.tracks.len() < limit
-            && let Some(token) = cont.take()
-            && pages < 10
-        {
-            pages += 1;
-            match self
-                .browse(&browse_pid, None, Some(&token), ClientKind::WebRemix, None)
-                .await
-            {
-                Ok(page_raw) => {
-                    let (page_pl, next_cont) = parsers::parse_playlist(clean_pid, &page_raw);
-                    if page_pl.tracks.is_empty() {
-                        break;
-                    }
-                    pl.tracks.extend(page_pl.tracks);
-                    cont = next_cont;
-                }
-                Err(err) => {
-                    debug!("Playlist pagination stopped early for {clean_pid}: {err}");
-                    break;
-                }
-            }
-        }
-
-        pl.tracks.truncate(limit);
-        pl.total = Some(pl.tracks.len());
-        Ok(pl)
+    async fn playlist_uncached(&self, playlist_id: &str, limit: usize) -> CoreResult<Playlist> {
+        self.fetch_playlist_uncached(playlist_id, limit).await
     }
 
     async fn radio(
@@ -701,141 +287,32 @@ impl CatalogApi for InnerTubeClient {
         continuation: Option<&str>,
         limit: usize,
     ) -> CoreResult<RadioBatch> {
-        let mut map = serde_json::Map::new();
-        map.insert("enablePersistentPlaylistPanel".into(), json!(true));
-        map.insert("isAudioOnly".into(), json!(true));
-
-        if let Some(cont) = continuation {
-            map.insert("continuation".into(), json!(cont));
-        } else {
-            if let Some(vid) = video_id {
-                map.insert("videoId".into(), json!(vid));
-            }
-            let pid = playlist_id
-                .map(str::to_string)
-                .or_else(|| video_id.map(|v| format!("RDAMVM{v}")));
-            if let Some(p) = pid {
-                map.insert("playlistId".into(), json!(p));
-            }
-            map.insert("params".into(), json!("wAEB"));
-        }
-
-        let raw = self
-            .post_json("next", ClientKind::WebRemix, None, map)
-            .await?;
-        let (mut batch, _, _) = parsers::parse_watch_playlist(&raw);
-        batch.tracks.truncate(limit);
-        Ok(batch)
+        self.radio_impl(video_id, playlist_id, continuation, limit)
+            .await
     }
 
     async fn song_related(&self, video_id: &str) -> CoreResult<Vec<SearchItem>> {
-        let mut map = serde_json::Map::new();
-        map.insert("videoId".into(), json!(video_id));
-        map.insert("isAudioOnly".into(), json!(true));
-        let raw = self
-            .post_json("next", ClientKind::WebRemix, None, map)
-            .await?;
-        let (_, _, related_id) = parsers::parse_watch_playlist(&raw);
-        let Some(rel_bid) = related_id else {
-            return Ok(Vec::new());
-        };
-        let rel_raw = self
-            .browse(&rel_bid, None, None, ClientKind::WebRemix, None)
-            .await?;
-        let mut out = Vec::new();
-        let mut carousels = Vec::new();
-        extract::find_all_by_key(&rel_raw, "musicCarouselShelfRenderer", &mut carousels);
-        for shelf in carousels {
-            if let Some(contents) = extract::get_array(shelf, &["contents"]) {
-                for c in contents {
-                    if let Some(rli) = c.get("musicResponsiveListItemRenderer")
-                        && let Some(item) = parsers::parse_responsive_list_item(rli)
-                    {
-                        out.push(item);
-                    } else if let Some(tri) = c.get("musicTwoRowItemRenderer")
-                        && let Some(item) = parsers::parse_two_row_item(tri)
-                    {
-                        out.push(item);
-                    }
-                }
-            }
-        }
-        Ok(out)
+        self.song_related_impl(video_id).await
     }
 
     async fn yt_lyrics(&self, video_id: &str) -> CoreResult<Option<Lyrics>> {
-        let mut map = serde_json::Map::new();
-        map.insert("videoId".into(), json!(video_id));
-        map.insert("isAudioOnly".into(), json!(true));
-        let watch_raw = self
-            .post_json("next", ClientKind::WebRemix, None, map)
-            .await?;
-        let (_, lyrics_id, _) = parsers::parse_watch_playlist(&watch_raw);
-        let Some(lid) = lyrics_id else {
-            return Ok(None);
-        };
-
-        // Try ANDROID_MUSIC timed lyrics first, then fall back to WEB_REMIX plain lyrics.
-        if let Ok(timed_raw) = self
-            .browse(&lid, None, None, ClientKind::AndroidMusic, None)
-            .await
-            && let Some(lyr) = parsers::parse_yt_lyrics(&timed_raw)
-        {
-            return Ok(Some(lyr));
-        }
-
-        let plain_raw = self
-            .browse(&lid, None, None, ClientKind::WebRemix, None)
-            .await?;
-        Ok(parsers::parse_yt_lyrics(&plain_raw))
+        self.yt_lyrics_impl(video_id).await
     }
 
     async fn library_playlists(&self) -> CoreResult<Vec<PlaylistSummary>> {
-        self.require_auth("library_playlists")?;
-        let raw = self
-            .browse(
-                "FEmusic_liked_playlists",
-                None,
-                None,
-                ClientKind::WebRemix,
-                None,
-            )
-            .await?;
-        Ok(parsers::parse_library_playlists(&raw))
+        self.library_playlists_impl().await
     }
 
     async fn library_liked_songs(&self, limit: usize) -> CoreResult<Vec<Track>> {
-        self.require_auth("library_liked_songs")?;
-        let pl = self.playlist("LM", limit).await?;
-        Ok(pl.tracks)
+        self.library_liked_songs_impl(limit).await
     }
 
     async fn library_albums(&self) -> CoreResult<Vec<AlbumSummary>> {
-        self.require_auth("library_albums")?;
-        let raw = self
-            .browse(
-                "FEmusic_liked_albums",
-                None,
-                None,
-                ClientKind::WebRemix,
-                None,
-            )
-            .await?;
-        Ok(parsers::parse_library_albums(&raw))
+        self.library_albums_impl().await
     }
 
     async fn library_artists(&self) -> CoreResult<Vec<ArtistSummary>> {
-        self.require_auth("library_artists")?;
-        let raw = self
-            .browse(
-                "FEmusic_library_corpus_artists",
-                None,
-                None,
-                ClientKind::WebRemix,
-                None,
-            )
-            .await?;
-        Ok(parsers::parse_library_artists(&raw))
+        self.library_artists_impl().await
     }
 
     async fn create_playlist(
@@ -844,21 +321,8 @@ impl CatalogApi for InnerTubeClient {
         description: &str,
         video_ids: &[String],
     ) -> CoreResult<String> {
-        self.require_auth("create_playlist")?;
-        let mut map = serde_json::Map::new();
-        map.insert("title".into(), json!(title));
-        map.insert("description".into(), json!(description));
-        map.insert("privacyStatus".into(), json!("PRIVATE"));
-        if !video_ids.is_empty() {
-            map.insert("videoIds".into(), json!(video_ids));
-        }
-        let raw = self
-            .post_json("playlist/create", ClientKind::WebRemix, None, map)
-            .await?;
-        raw.get("playlistId")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or_else(|| CoreError::Catalog("playlist/create response missing playlistId".into()))
+        self.create_playlist_impl(title, description, video_ids)
+            .await
     }
 
     async fn edit_playlist(
@@ -866,94 +330,29 @@ impl CatalogApi for InnerTubeClient {
         remote_playlist_id: &str,
         actions: &[PlaylistEditAction],
     ) -> CoreResult<PlaylistEditResult> {
-        self.require_auth("edit_playlist")?;
-        if actions.is_empty() {
-            return Ok(PlaylistEditResult::default());
-        }
-        let clean_pid = remote_playlist_id
-            .strip_prefix("VL")
-            .unwrap_or(remote_playlist_id);
-        let mut map = serde_json::Map::new();
-        map.insert("playlistId".into(), json!(clean_pid));
-        map.insert(
-            "actions".into(),
-            Value::Array(
-                actions
-                    .iter()
-                    .map(PlaylistEditAction::to_innertube_json)
-                    .collect(),
-            ),
-        );
-        let raw = self
-            .post_json("browse/edit_playlist", ClientKind::WebRemix, None, map)
-            .await?;
-        Ok(parsers::parse_playlist_edit_results(&raw))
+        self.edit_playlist_impl(remote_playlist_id, actions).await
     }
 
     async fn delete_playlist(&self, remote_playlist_id: &str) -> CoreResult<()> {
-        self.require_auth("delete_playlist")?;
-        let clean_pid = remote_playlist_id
-            .strip_prefix("VL")
-            .unwrap_or(remote_playlist_id);
-        let mut map = serde_json::Map::new();
-        map.insert("playlistId".into(), json!(clean_pid));
-        let _ = self
-            .post_json("playlist/delete", ClientKind::WebRemix, None, map)
-            .await?;
-        Ok(())
+        self.delete_playlist_impl(remote_playlist_id).await
     }
 
     async fn rate_song(&self, video_id: &str, rating: SongRating) -> CoreResult<()> {
-        self.require_auth("rate_song")?;
-        let mut map = serde_json::Map::new();
-        map.insert("target".into(), json!({ "videoId": video_id }));
-        let _ = self
-            .post_json(rating.endpoint(), ClientKind::WebRemix, None, map)
-            .await?;
-        Ok(())
+        self.rate_song_impl(video_id, rating).await
     }
 
     async fn set_artist_subscription(&self, channel_id: &str, subscribe: bool) -> CoreResult<()> {
-        self.require_auth("set_artist_subscription")?;
-        let mut map = serde_json::Map::new();
-        map.insert("channelIds".into(), json!([channel_id]));
-        let ep = if subscribe {
-            "subscription/subscribe"
-        } else {
-            "subscription/unsubscribe"
-        };
-        let _ = self.post_json(ep, ClientKind::WebRemix, None, map).await?;
-        Ok(())
+        self.set_artist_subscription_impl(channel_id, subscribe)
+            .await
     }
 
     async fn set_album_library_status(&self, browse_id: &str, save: bool) -> CoreResult<()> {
-        self.require_auth("set_album_library_status")?;
-        // YouTube Music `like/like` requires the album's audioPlaylistId (`OLAK5uy_...`), not `MPREb_...`.
-        let playlist_id = if browse_id.starts_with("MPRE") {
-            match self.album(browse_id).await {
-                Ok(alb) => alb
-                    .audio_playlist_id
-                    .unwrap_or_else(|| browse_id.to_string()),
-                Err(_) => browse_id.to_string(),
-            }
-        } else {
-            browse_id.to_string()
-        };
-        let mut map = serde_json::Map::new();
-        map.insert("target".into(), json!({ "playlistId": playlist_id }));
-        let ep = if save { "like/like" } else { "like/removelike" };
-        let _ = self.post_json(ep, ClientKind::WebRemix, None, map).await?;
-        Ok(())
+        self.set_album_library_status_impl(browse_id, save).await
     }
 
     async fn set_playlist_library_status(&self, playlist_id: &str, save: bool) -> CoreResult<()> {
-        self.require_auth("set_playlist_library_status")?;
-        let clean_pid = playlist_id.strip_prefix("VL").unwrap_or(playlist_id);
-        let mut map = serde_json::Map::new();
-        map.insert("target".into(), json!({ "playlistId": clean_pid }));
-        let ep = if save { "like/like" } else { "like/removelike" };
-        let _ = self.post_json(ep, ClientKind::WebRemix, None, map).await?;
-        Ok(())
+        self.set_playlist_library_status_impl(playlist_id, save)
+            .await
     }
 
     async fn fetch_playback_tracking(
@@ -961,16 +360,8 @@ impl CatalogApi for InnerTubeClient {
         video_id: &str,
         report_enabled: bool,
     ) -> CoreResult<Option<PlaybackTracking>> {
-        // Hard privacy gate: strictly no-op in Anonymous mode or when opt-in toggle is off.
-        if !report_enabled || !self.auth.is_authenticated() {
-            return Ok(None);
-        }
-        let mut map = serde_json::Map::new();
-        map.insert("videoId".into(), json!(video_id));
-        let raw = self
-            .post_json("player", ClientKind::WebRemix, None, map)
-            .await?;
-        Ok(parsers::parse_player_tracking(video_id, &raw))
+        self.fetch_playback_tracking_impl(video_id, report_enabled)
+            .await
     }
 
     async fn report_playback(
@@ -980,68 +371,7 @@ impl CatalogApi for InnerTubeClient {
         event: PlaybackTelemetryEvent,
         report_enabled: bool,
     ) -> CoreResult<()> {
-        // Hard privacy gate: strictly no-op in Anonymous mode or when opt-in toggle is off.
-        if !report_enabled || !self.auth.is_authenticated() {
-            return Ok(());
-        }
-
-        let (base_url, query_pairs): (&str, Vec<(&str, String)>) = match event {
-            PlaybackTelemetryEvent::Start => {
-                let Some(url) = tracking.playback_url.as_deref() else {
-                    return Ok(());
-                };
-                (
-                    url,
-                    vec![
-                        ("cpn", cpn.to_string()),
-                        ("ver", "2".to_string()),
-                        ("c", endpoints::WEB_REMIX_CLIENT_NAME.to_string()),
-                        ("cver", endpoints::WEB_REMIX_CLIENT_VERSION.to_string()),
-                        ("docid", tracking.video_id.clone()),
-                    ],
-                )
-            }
-            PlaybackTelemetryEvent::Watchtime {
-                elapsed_secs,
-                duration_secs,
-                playing,
-            } => {
-                let Some(url) = tracking.watchtime_url.as_deref() else {
-                    return Ok(());
-                };
-                let len = if duration_secs > 0.0 {
-                    duration_secs
-                } else {
-                    f64::from(tracking.length_secs)
-                };
-                (
-                    url,
-                    vec![
-                        ("cpn", cpn.to_string()),
-                        ("ver", "2".to_string()),
-                        ("c", endpoints::WEB_REMIX_CLIENT_NAME.to_string()),
-                        ("cver", endpoints::WEB_REMIX_CLIENT_VERSION.to_string()),
-                        ("docid", tracking.video_id.clone()),
-                        ("cmt", format!("{elapsed_secs:.3}")),
-                        ("et", format!("{elapsed_secs:.3}")),
-                        ("st", "0.000".to_string()),
-                        ("len", format!("{len:.3}")),
-                        (
-                            "state",
-                            if playing { "playing" } else { "paused" }.to_string(),
-                        ),
-                    ],
-                )
-            }
-        };
-
-        let req = self
-            .http
-            .get(base_url)
-            .header("User-Agent", endpoints::WEB_USER_AGENT)
-            .query(&query_pairs);
-        let req = self.auth.apply_headers(req).await?;
-        let _ = req.send().await?;
-        Ok(())
+        self.report_playback_impl(tracking, cpn, event, report_enabled)
+            .await
     }
 }

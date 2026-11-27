@@ -79,8 +79,8 @@ mod widget_render_tests {
     use musick_tui::widgets::cover::center_square_canvas;
     use musick_tui::widgets::{
         BrailleSpinner, CavaWidget, ColumnDef, CoverRenderer, LyricsBox, MediaListItem,
-        NowPlayingBar, SCROLL_THUMB_GLYPH, SCROLL_TRACK_GLYPH, TableRow, TopBar, TrackTable,
-        render_media_list,
+        NowPlayingBar, RootTab, SCROLL_THUMB_GLYPH, SCROLL_TRACK_GLYPH, TableRow, TopBar,
+        TrackTable, render_media_list,
     };
 
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
@@ -102,7 +102,7 @@ mod widget_render_tests {
             term.draw(|f| {
                 f.render_widget(
                     TopBar {
-                        active_tab: 0,
+                        active_tab: RootTab::Player,
                         icons: UNICODE_ICONS,
                         auth_mode: AuthMode::Anonymous,
                         syncing: false,
@@ -116,14 +116,16 @@ mod widget_render_tests {
             .unwrap();
             let rendered = buffer_text(&term);
             assert!(rendered.contains("musick"));
-            assert!(rendered.contains("1 Home"));
             assert!(rendered.contains("●"));
             if w >= 100 {
+                assert!(rendered.contains("1 Player"));
                 assert!(rendered.contains("2 Playlists"));
                 assert!(rendered.contains("3 Library"));
                 assert!(rendered.contains("4 Queue"));
                 assert!(rendered.contains("5 Settings"));
                 assert!(rendered.contains("no cookies"));
+            } else {
+                assert!(rendered.contains("1 Play"));
             }
         }
     }
@@ -160,6 +162,7 @@ mod widget_render_tests {
         .unwrap();
 
         let rendered = buffer_text(&term);
+        assert!(rendered.contains("Now Playing"));
         assert!(rendered.contains("Instant Crush"));
         assert!(rendered.contains("⠋ Resolving"));
         assert!(rendered.contains("120%"));
@@ -205,6 +208,7 @@ mod widget_render_tests {
                     lyrics: &lyrics,
                     active_idx: Some(1),
                     has_track: true,
+                    loading: false,
                     show_translation: true,
                     translating: false,
                     blank_between: true,
@@ -283,7 +287,7 @@ mod widget_render_tests {
             );
 
             // cover_panel_block has zero extra horizontal padding so inner canvas centers exact 1:1 cover with symmetric 4-side gaps
-            let block = cover_panel_block("Now Playing", None, false);
+            let block = cover_panel_block("Cover", None, false);
             let inner = block.inner(Rect::new(0, 0, panel_w, panel_h));
             assert_eq!(inner.width, panel_w - 2);
             assert_eq!(inner.height, panel_h - 2);
@@ -366,6 +370,7 @@ mod widget_render_tests {
                     columns: &cols,
                     rows: &rows,
                     cursor: 0,
+                    scroll: None,
                     focused: true,
                     show_header: false,
                     loading: false,
@@ -413,6 +418,7 @@ mod widget_render_tests {
                     Rect::new(0, 0, 50, 6),
                     &items,
                     0,
+                    None,
                     true,
                     false,
                     "",
@@ -428,5 +434,80 @@ mod widget_render_tests {
             assert!(rendered.contains("257M"));
             assert!(rendered.contains("3:17"));
         }
+    }
+
+    #[test]
+    fn scroll_state_text_input_lyrics_loading_spinner_and_detail_hero_collapse() {
+        use musick_tui::keymap::Action;
+        use musick_tui::text::cell_width;
+        use musick_tui::views::detail_hero::split_detail_hero;
+        use musick_tui::widgets::{ScrollState, TextInput};
+
+        // 1. ScrollState maintains smooth scrolloff hysteresis in both directions
+        let scroll = ScrollState::new();
+        assert_eq!(scroll.ensure_visible(0, 10, 30, 2), 0);
+        assert_eq!(scroll.ensure_visible(7, 10, 30, 2), 0);
+        // cursor=8 enters bottom 2-row scrolloff margin -> scrolls viewport down to 1
+        assert_eq!(scroll.ensure_visible(8, 10, 30, 2), 1);
+        assert_eq!(scroll.ensure_visible(12, 10, 30, 2), 5);
+        // moving slightly back up stays sticky until entering top 2-row margin
+        assert_eq!(scroll.ensure_visible(8, 10, 30, 2), 5);
+        assert_eq!(scroll.ensure_visible(6, 10, 30, 2), 4);
+        scroll.reset();
+        assert_eq!(scroll.offset(), 0);
+
+        // 2. TextInput supports mid-string cursor editing, Ctrl+W, Home/End, Delete, and CJK viewport slicing
+        let mut ti = TextInput::from_text("hello world");
+        assert_eq!(ti.cursor(), 11);
+        ti.handle_action(&Action::InputLeft);
+        ti.handle_action(&Action::InputLeft);
+        ti.handle_action(&Action::InputChar('X'));
+        assert_eq!(ti.as_str(), "hello worXld");
+        ti.handle_action(&Action::InputDelete);
+        assert_eq!(ti.as_str(), "hello worXd");
+        ti.handle_action(&Action::InputEnd);
+        ti.handle_action(&Action::InputDeleteWord);
+        assert_eq!(ti.as_str(), "hello ");
+        ti.handle_action(&Action::InputHome);
+        ti.handle_action(&Action::InputChar('>'));
+        assert_eq!(ti.as_str(), ">hello ");
+        ti.set_text("夜に駆ける YOASOBI long query string");
+        let (before, cur, after) = ti.visible_slice(12);
+        assert!(cell_width(&before) + cell_width(&cur) + cell_width(&after) <= 12);
+
+        // 3. LyricsBox renders Braille spinner while loading lyrics
+        let mut term = Terminal::new(TestBackend::new(40, 6)).unwrap();
+        let empty = Lyrics::default();
+        term.draw(|f| {
+            f.render_widget(
+                LyricsBox {
+                    lyrics: &empty,
+                    active_idx: None,
+                    has_track: true,
+                    loading: true,
+                    show_translation: false,
+                    translating: false,
+                    blank_between: false,
+                    pad_left: 0,
+                    scroll_offset: 0,
+                    spinner: BrailleSpinner::new(false),
+                },
+                Rect::new(0, 0, 40, 6),
+            );
+        })
+        .unwrap();
+        assert!(buffer_text(&term).contains("⠋ Loading lyrics"));
+
+        // 4. split_detail_hero collapses cover panel completely when ImageProtocol::Off
+        let mut covers = CoverRenderer::halfblocks_for_test();
+        let area = Rect::new(0, 0, 100, 26);
+        let with_cover = split_detail_hero(area, &covers);
+        assert!(with_cover.cover_area.is_some());
+        assert!(with_cover.info_area.width < area.width);
+
+        covers.set_protocol(ImageProtocol::Off);
+        let without_cover = split_detail_hero(area, &covers);
+        assert!(without_cover.cover_area.is_none());
+        assert_eq!(without_cover.info_area.width, area.width);
     }
 }

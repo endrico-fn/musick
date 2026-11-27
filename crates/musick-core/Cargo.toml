@@ -10,14 +10,12 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
-chrono.workspace = true
 directories.workspace = true
 hex.workspace = true
 html-escape.workspace = true
 image.workspace = true
 keyring.workspace = true
 lru.workspace = true
-rand.workspace = true
 rapidfuzz.workspace = true
 regex.workspace = true
 reqwest.workspace = true

@@ -32,32 +32,6 @@ impl AuthMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum CoverSize {
-    S,
-    #[default]
-    M,
-    L,
-}
-
-impl CoverSize {
-    pub fn cycle(self) -> Self {
-        match self {
-            Self::S => Self::M,
-            Self::M => Self::L,
-            Self::L => Self::S,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::S => "S",
-            Self::M => "M",
-            Self::L => "L",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum IconMode {
     #[default]
@@ -103,9 +77,21 @@ pub enum CavaSmoothing {
 #[serde(rename_all = "lowercase")]
 pub enum CavaAudioSource {
     #[default]
+    #[serde(alias = "off")]
     Auto,
-    Monitor,
-    Off,
+    PipeWire,
+    #[serde(rename = "pulse_monitor", alias = "pulsemonitor", alias = "monitor")]
+    PulseMonitor,
+}
+
+impl CavaAudioSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::PipeWire => "PipeWire",
+            Self::PulseMonitor => "Pulse Monitor",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -197,10 +183,10 @@ fn default_sync_interval_secs() -> u64 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PrivacySettings {
-    /// No cookies / anonymous by default; user must explicitly opt into OAuth or Browser auth.
+    /// no cookies / anonymous by default; user must explicitly opt into oauth or browser auth
     pub auth_mode: AuthMode,
     pub save_history: bool,
-    /// Strictly opt-in playback telemetry to YouTube Music algorithm (never active in Anonymous).
+    /// strictly opt-in playback telemetry to youtube music algorithm (never active in anonymous)
     pub report_playback_history: bool,
     #[serde(default = "default_true")]
     pub remote_suggestions: bool,
@@ -256,7 +242,6 @@ impl Default for CacheSettings {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DisplaySettings {
-    pub cover_size: CoverSize,
     pub icons: IconMode,
     pub image_protocol: ImageProtocol,
     #[serde(default = "default_region")]
@@ -272,7 +257,6 @@ pub struct DisplaySettings {
 impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
-            cover_size: CoverSize::M,
             icons: IconMode::Unicode,
             image_protocol: ImageProtocol::Auto,
             region: default_region(),

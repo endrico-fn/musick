@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -8,7 +9,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::debug;
 
-use musick_core::{CavaAudioSource, CavaSmoothing};
+use musick_core::{CavaAudioSource, CavaSmoothing, ensure_private_dir};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CavaFrame {
@@ -83,13 +84,15 @@ pub fn detect_cava_methods() -> Vec<&'static str> {
     methods
 }
 
-fn default_pulse_monitor() -> String {
-    let output = std::process::Command::new("pactl")
+async fn default_pulse_monitor() -> String {
+    let fut = Command::new("pactl")
         .arg("get-default-sink")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .kill_on_drop(true)
         .output();
-    if let Ok(out) = output
+    if let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(2), fut).await
         && out.status.success()
     {
         let sink = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -100,20 +103,28 @@ fn default_pulse_monitor() -> String {
     "auto".to_string()
 }
 
-pub fn resolve_cava_source(method: &str, audio_source: CavaAudioSource) -> String {
-    if audio_source == CavaAudioSource::Monitor && method == "pulse" {
-        return default_pulse_monitor();
+pub fn methods_for_source(source: CavaAudioSource) -> Vec<&'static str> {
+    match source {
+        CavaAudioSource::Auto => detect_cava_methods(),
+        CavaAudioSource::PipeWire => vec!["pipewire"],
+        CavaAudioSource::PulseMonitor => vec!["pulse"],
+    }
+}
+
+pub async fn resolve_cava_source(method: &str, audio_source: CavaAudioSource) -> String {
+    if audio_source == CavaAudioSource::PulseMonitor && method == "pulse" {
+        return default_pulse_monitor().await;
     }
     "auto".to_string()
 }
 
-pub fn build_cava_config(
+pub fn build_cava_config_for_source(
     bars: usize,
     method: &str,
+    source: &str,
     max_range: u32,
     framerate: u32,
     smoothing: CavaSmoothing,
-    audio_source: CavaAudioSource,
 ) -> String {
     let mut even_bars = bars.max(4);
     if !even_bars.is_multiple_of(2) {
@@ -123,8 +134,7 @@ pub fn build_cava_config(
     let input_block = if method.is_empty() {
         String::new()
     } else {
-        let src = resolve_cava_source(method, audio_source);
-        format!("method = {method}\nsource = {src}\n")
+        format!("method = {method}\nsource = {source}\n")
     };
     format!(
         "[general]\n\
@@ -151,6 +161,17 @@ waves = 0\n\
 noise_reduction = {noise_reduction}\n",
         framerate.max(10)
     )
+}
+
+pub fn build_cava_config(
+    bars: usize,
+    method: &str,
+    max_range: u32,
+    framerate: u32,
+    smoothing: CavaSmoothing,
+    _audio_source: CavaAudioSource,
+) -> String {
+    build_cava_config_for_source(bars, method, "auto", max_range, framerate, smoothing)
 }
 
 pub fn parse_cava_frame(line: &str, max_range: u32) -> Option<Vec<f32>> {
@@ -280,13 +301,18 @@ impl CavaRunner {
     }
 }
 
-fn has_cava_binary() -> bool {
-    std::process::Command::new("cava")
+async fn has_cava_binary() -> bool {
+    let fut = Command::new("cava")
         .arg("-v")
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .is_ok()
+        .kill_on_drop(true)
+        .status();
+    matches!(
+        tokio::time::timeout(Duration::from_secs(2), fut).await,
+        Ok(Ok(_))
+    )
 }
 
 struct ActiveCava {
@@ -317,15 +343,15 @@ async fn run_cava_task(
     mut ctrl_rx: mpsc::UnboundedReceiver<CavaMsg>,
     frame_tx: watch::Sender<CavaFrame>,
 ) {
-    let cava_present = has_cava_binary();
-    let methods = detect_cava_methods();
+    let cava_present = has_cava_binary().await;
+    let mut methods = methods_for_source(ctrl.audio_source);
     let mut method_idx = 0usize;
     let mut active_proc: Option<ActiveCava> = None;
     let mut smooth_bars: Vec<f32> = Vec::new();
     let mut line_buf = String::new();
 
     loop {
-        let disabled = !ctrl.enabled || ctrl.audio_source == CavaAudioSource::Off;
+        let disabled = !ctrl.enabled;
         let want_live =
             !disabled && ctrl.visible && ctrl.playing && !ctrl.paused && !ctrl.reduced_motion;
 
@@ -354,10 +380,11 @@ async fn run_cava_task(
                 live: false,
             });
 
-            // Sleep completely idle (zero CPU!) until control state changes
+            // sleep completely idle until control state changes
             match ctrl_rx.recv().await {
                 Some(CavaMsg::Control(next)) => {
                     if next.audio_source != ctrl.audio_source {
+                        methods = methods_for_source(next.audio_source);
                         method_idx = 0;
                     }
                     ctrl = next;
@@ -374,7 +401,13 @@ async fn run_cava_task(
                 live: false,
             });
             match ctrl_rx.recv().await {
-                Some(CavaMsg::Control(next)) => ctrl = next,
+                Some(CavaMsg::Control(next)) => {
+                    if next.audio_source != ctrl.audio_source {
+                        methods = methods_for_source(next.audio_source);
+                        method_idx = 0;
+                    }
+                    ctrl = next;
+                }
                 Some(CavaMsg::Shutdown) | None => break,
             }
             continue;
@@ -387,7 +420,9 @@ async fn run_cava_task(
                 method,
                 ctrl.smoothing,
                 ctrl.audio_source,
-            ) {
+            )
+            .await
+            {
                 Ok(proc) => {
                     active_proc = Some(proc);
                     let _ = frame_tx.send(CavaFrame {
@@ -412,7 +447,10 @@ async fn run_cava_task(
             });
             match ctrl_rx.recv().await {
                 Some(CavaMsg::Control(next)) => {
-                    if next.audio_source != ctrl.audio_source || (next.playing && !ctrl.playing) {
+                    if next.audio_source != ctrl.audio_source {
+                        methods = methods_for_source(next.audio_source);
+                        method_idx = 0;
+                    } else if next.playing && !ctrl.playing {
                         method_idx = 0;
                     }
                     ctrl = next;
@@ -431,6 +469,7 @@ async fn run_cava_task(
                             || next.audio_source != ctrl.audio_source
                             || next.bar_count.abs_diff(ctrl.bar_count) >= 4;
                         if next.audio_source != ctrl.audio_source {
+                            methods = methods_for_source(next.audio_source);
                             method_idx = 0;
                         }
                         ctrl = next;
@@ -496,19 +535,44 @@ async fn run_cava_task(
     }
 }
 
-fn spawn_cava_process(
+fn write_private_cava_conf(contents: &str) -> std::io::Result<PathBuf> {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(std::env::temp_dir)
+        .join("musick");
+    let _ = ensure_private_dir(&dir);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("cava-{}-{seq}.conf", std::process::id()));
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)?;
+        f.write_all(contents.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&path, contents)?;
+    }
+    Ok(path)
+}
+
+async fn spawn_cava_process(
     bars: usize,
     method: &str,
     smoothing: CavaSmoothing,
     audio_source: CavaAudioSource,
 ) -> std::io::Result<ActiveCava> {
-    let cfg = build_cava_config(bars, method, 1000, 30, smoothing, audio_source);
-    let tmp = tempfile::Builder::new()
-        .prefix("musick_cava_")
-        .suffix(".conf")
-        .tempfile()?;
-    let (_, conf_path) = tmp.keep().map_err(|e| e.error)?;
-    std::fs::write(&conf_path, cfg)?;
+    let source = resolve_cava_source(method, audio_source).await;
+    let cfg = build_cava_config_for_source(bars, method, &source, 1000, 30, smoothing);
+    let conf_path = write_private_cava_conf(&cfg)?;
 
     let mut child = Command::new("cava")
         .arg("-p")

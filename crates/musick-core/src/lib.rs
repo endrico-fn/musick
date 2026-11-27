@@ -8,6 +8,7 @@ pub mod lyrics;
 pub mod paths;
 pub mod protocol;
 pub mod search;
+pub mod singleflight;
 pub mod storage;
 pub mod sync;
 
@@ -32,7 +33,7 @@ pub use search::{
 pub use storage::{CacheManager, CacheStats, OutboxOp, PruneReport, UserStore};
 pub use sync::{SyncEngine, SyncReport};
 
-/// Build a shared HTTP/2 rustls client with zero cookie persistence.
+/// build a shared http/2 rustls client with zero cookie persistence
 pub fn build_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .pool_max_idle_per_host(8)
@@ -42,16 +43,18 @@ pub fn build_http_client() -> reqwest::Client {
 }
 
 pub use config::{
-    AudioQuality, AuthMode, CacheSettings, CavaAudioSource, CavaPalette, CavaSmoothing, CoverSize,
+    AudioQuality, AuthMode, CacheSettings, CavaAudioSource, CavaPalette, CavaSmoothing,
     DisplaySettings, IconMode, ImageProtocol, LyricsSettings, LyricsSource, PlayerSettings,
     PrivacySettings, Settings, SyncSettings, VALID_REGIONS,
 };
 pub use domain::{
-    Album, AlbumSummary, Artist, ArtistRef, ArtistSummary, HomeFeed, LyricLine, Lyrics, Playlist,
-    PlaylistSource, PlaylistSummary, QueueRole, RepeatMode, SavedCollection, SavedCollectionKind,
-    SearchCategory, SearchItem, Thumb, Track, UserPlaylist, best_thumb_url, clean_media_title,
-    format_duration, format_duration_allow_zero, search_item_key,
+    Album, AlbumSummary, Artist, ArtistRef, ArtistSummary, DiscoverFeed, LyricLine, Lyrics,
+    Playlist, PlaylistSource, PlaylistSummary, QueueRole, RepeatMode, SavedCollection,
+    SavedCollectionKind, SearchCategory, SearchItem, SessionState, Thumb, Track, UserPlaylist,
+    best_thumb_url, clean_media_title, format_duration, format_duration_allow_zero,
+    is_valid_video_id, search_item_key,
 };
 pub use error::{CoreError, CoreResult};
 pub use paths::{AppPaths, atomic_write_bytes, atomic_write_text, ensure_private_dir};
 pub use protocol::{AppCommand, PlaybackSnapshot, PlayerEvent, PositionTick, QueueSnapshot};
+pub use singleflight::SingleFlight;

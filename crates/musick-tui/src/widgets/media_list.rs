@@ -6,7 +6,9 @@ use ratatui::widgets::Paragraph;
 
 use crate::text::{cell_width, split_row_cells};
 use crate::theme::{ACCENT, CURSOR_BG, CURSOR_BLUR_BG, DIM, IconSet, TEXT};
-use crate::widgets::{BrailleSpinner, CoverRenderer, render_scrollbar};
+use crate::widgets::{
+    BrailleSpinner, CoverRenderer, ScrollState, compute_scroll_offset, render_scrollbar,
+};
 
 #[derive(Debug, Clone)]
 pub struct MediaListItem {
@@ -26,6 +28,7 @@ pub fn render_media_list(
     area: Rect,
     items: &[MediaListItem],
     cursor: usize,
+    scroll: Option<&ScrollState>,
     focused: bool,
     loading: bool,
     loading_label: &str,
@@ -89,10 +92,9 @@ pub fn render_media_list(
     }
 
     let clamped_cursor = cursor.min(items.len().saturating_sub(1));
-    let scroll_start = if clamped_cursor >= visible_items {
-        clamped_cursor + 1 - visible_items
-    } else {
-        0
+    let scroll_start = match scroll {
+        Some(s) => s.ensure_visible(clamped_cursor, visible_items, items.len(), 1),
+        None => compute_scroll_offset(0, clamped_cursor, visible_items, items.len(), 1),
     };
 
     for (slot, item_idx) in (scroll_start..items.len()).take(visible_items).enumerate() {

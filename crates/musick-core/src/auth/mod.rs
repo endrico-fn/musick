@@ -93,8 +93,7 @@ impl AuthManager {
         }
     }
 
-    /// Load persisted credentials only when the user explicitly configured OAuth or Browser mode.
-    /// In `AuthMode::Anonymous` (the default), zero credentials are loaded or used.
+    /// load persisted credentials only when oauth or browser mode is explicitly configured
     pub fn load_for_mode(&self, mode: AuthMode) -> CoreResult<AuthMode> {
         if mode == AuthMode::Anonymous {
             let mut guard = self
@@ -180,7 +179,7 @@ impl AuthManager {
         }
     }
 
-    /// Returns Brand Account `onBehalfOfUser` / `X-Goog-PageId` in both OAuth and Browser modes.
+    /// returns brand account `onBehalfOfUser` / `X-Goog-PageId` in both oauth and browser modes
     pub fn on_behalf_of_user(&self) -> Option<String> {
         let guard = self.state.read().ok()?;
         match &*guard {
@@ -282,8 +281,7 @@ impl AuthManager {
         }
     }
 
-    /// Apply authentication headers to an outgoing InnerTube HTTP request.
-    /// Strictly a no-op in `AuthMode::Anonymous` (zero cookies, zero auth headers).
+    /// apply auth headers to outgoing innertube requests (strictly no-op in anonymous mode)
     pub async fn apply_headers(&self, req: RequestBuilder) -> CoreResult<RequestBuilder> {
         let snapshot = {
             let guard = self

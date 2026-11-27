@@ -1,9 +1,9 @@
-use std::io::{self, Read};
+use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -11,79 +11,25 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use tokio::sync::{Notify, mpsc};
+use tokio::sync::{Notify, mpsc, watch};
 
 use musick_audio::{
     CavaControl, CavaRunner, HybridStreamResolver, MprisService, MpvIpcBackend, PlayerEngine,
     PlayerEngineDeps,
 };
 use musick_core::{
-    AppCommand, AppPaths, AuthManager, AuthMode, CacheManager, ImageService, InnerTubeClient,
-    KeyringSecretStore, LyricsService, OAuthPollStatus, SearchService, Settings, SyncEngine,
-    UserStore, build_http_client,
+    AppCommand, AppPaths, AuthManager, CacheManager, ImageService, InnerTubeClient,
+    KeyringSecretStore, LyricsService, SearchService, Settings, SyncEngine, UserStore,
+    build_http_client,
 };
 use musick_tui::app::{App, AppServices, BgMsg};
-use musick_tui::text::format_bytes;
-use musick_tui::widgets::CoverRenderer;
+use musick_tui::cli::{Cli, init_logging, run_cli_command};
+use musick_tui::widgets::{CoverRenderer, write_kitty_delete_all};
 
-#[derive(Parser)]
-#[command(
-    name = "musick",
-    version,
-    about = "Modern full-Rust TUI YouTube Music streaming player (no cookies by default)"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Manage opt-in YouTube Music authentication (OAuth2 or Browser Auth)
-    Auth {
-        #[command(subcommand)]
-        action: AuthCommands,
-    },
-    /// Inspect, prune, or clear disk caches (never touches user playlists or library)
-    Cache {
-        #[command(subcommand)]
-        action: CacheCommands,
-    },
-}
-
-#[derive(Subcommand)]
-enum AuthCommands {
-    /// Show current authentication status
-    Status,
-    /// Authenticate via Google OAuth2 TV/Device Flow
-    Oauth {
-        #[arg(long, env = "MUSICK_OAUTH_CLIENT_ID")]
-        client_id: String,
-        #[arg(long, env = "MUSICK_OAUTH_CLIENT_SECRET")]
-        client_secret: String,
-        #[arg(long)]
-        page_id: Option<String>,
-    },
-    /// Import browser DevTools headers or Cookie string (reads from stdin)
-    Browser {
-        #[arg(long)]
-        page_id: Option<String>,
-    },
-    /// Logout, wipe credentials, purge synced remote cache, and reset to Anonymous
-    Logout,
-}
-
-#[derive(Subcommand)]
-enum CacheCommands {
-    /// Display live disk cache usage statistics
-    Stats,
-    /// Run cache janitor to prune expired and over-budget entries
-    Prune,
-    /// Clear all caches and rotate visitorData (preserves musick.db)
-    Clear,
-}
+const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(33);
 
 fn restore_terminal() {
+    write_kitty_delete_all();
     let _ = disable_raw_mode();
     let _ = execute!(io::stdout(), DisableBracketedPaste, LeaveAlternateScreen);
 }
@@ -93,6 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     let paths = AppPaths::default_system()?;
     paths.ensure_dirs()?;
+    init_logging(cli.log_file.as_deref(), &paths);
     let settings = Settings::load(&paths.settings_file());
 
     if let Some(cmd) = cli.command {
@@ -102,135 +49,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_tui(paths, settings).await
 }
 
-async fn run_cli_command(
-    cmd: Commands,
-    paths: &AppPaths,
-    mut settings: Settings,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let http = build_http_client();
-    let store = Arc::new(KeyringSecretStore::new(paths));
-    let auth = AuthManager::new_anonymous(store, http);
-    let _ = auth.load_for_mode(settings.privacy.auth_mode);
-
-    match cmd {
-        Commands::Auth { action } => match action {
-            AuthCommands::Status => {
-                println!("Auth mode:   {}", auth.mode().as_str());
-                println!("Account key: {}", auth.account_key());
-                if let Some(pid) = auth.on_behalf_of_user() {
-                    println!("Brand Page:  {pid}");
-                }
-                println!(
-                    "Telemetry:   {}",
-                    if settings.privacy.report_playback_history && auth.is_authenticated() {
-                        "enabled (opt-in)"
-                    } else {
-                        "disabled"
-                    }
-                );
-            }
-            AuthCommands::Oauth {
-                client_id,
-                client_secret,
-                page_id,
-            } => {
-                let prompt = auth.start_oauth_device_flow(&client_id).await?;
-                println!("Open: {}", prompt.verification_url);
-                println!("Code: {}", prompt.user_code);
-                println!("Waiting for authorization…");
-                let mut wait = Duration::from_secs(prompt.interval.max(2));
-                loop {
-                    tokio::time::sleep(wait).await;
-                    match auth
-                        .poll_oauth_device_token(
-                            &client_id,
-                            &client_secret,
-                            &prompt.device_code,
-                            page_id.clone(),
-                        )
-                        .await?
-                    {
-                        OAuthPollStatus::Pending => {}
-                        OAuthPollStatus::SlowDown => wait += Duration::from_secs(3),
-                        OAuthPollStatus::Authorized(_) => {
-                            settings.privacy.auth_mode = AuthMode::OAuth;
-                            settings.save(&paths.settings_file())?;
-                            println!("Authorized! Account key: {}", auth.account_key());
-                            break;
-                        }
-                    }
-                }
-            }
-            AuthCommands::Browser { page_id } => {
-                println!("Paste DevTools request headers or Cookie string, then press Ctrl-D:");
-                let mut raw = String::new();
-                io::stdin().read_to_string(&mut raw)?;
-                auth.import_browser_headers(&raw, page_id)?;
-                settings.privacy.auth_mode = AuthMode::Browser;
-                settings.save(&paths.settings_file())?;
-                println!(
-                    "Browser auth stored securely. Account key: {}",
-                    auth.account_key()
-                );
-            }
-            AuthCommands::Logout => {
-                let prev = auth.account_key();
-                auth.logout()?;
-                let user_store = UserStore::open(paths)?;
-                user_store.purge_account(&prev)?;
-                let cache = CacheManager::open(paths, settings.cache.clone())?;
-                cache.clear_visitor_data();
-                settings.privacy.auth_mode = AuthMode::Anonymous;
-                settings.privacy.report_playback_history = false;
-                settings.save(&paths.settings_file())?;
-                println!("Logged out cleanly -> anonymous (no cookies). Local playlists kept.");
-            }
-        },
-        Commands::Cache { action } => {
-            let cache = CacheManager::open(paths, settings.cache.clone())?;
-            match action {
-                CacheCommands::Stats => {
-                    let st = cache.stats()?;
-                    println!(
-                        "Catalog: {} entries ({})",
-                        st.catalog_entries,
-                        format_bytes(st.catalog_bytes)
-                    );
-                    println!(
-                        "Lyrics:  {} entries ({})",
-                        st.lyrics_entries,
-                        format_bytes(st.lyrics_bytes)
-                    );
-                    println!(
-                        "Images:  {} files ({})",
-                        st.image_files,
-                        format_bytes(st.image_bytes)
-                    );
-                    println!("Total:   {}", format_bytes(st.total_bytes));
-                }
-                CacheCommands::Prune => {
-                    let rep = cache.prune_all()?;
-                    println!(
-                        "Pruned {} catalog, {} lyrics, {} images, {} orphans ({} freed)",
-                        rep.catalog_evicted,
-                        rep.lyrics_evicted,
-                        rep.images_evicted,
-                        rep.orphan_files_removed,
-                        format_bytes(rep.bytes_freed)
-                    );
-                }
-                CacheCommands::Clear => {
-                    cache.clear_cache()?;
-                    println!("Cache cleared and visitorData rotated (musick.db untouched).");
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std::error::Error>> {
-    // Install panic hook to always restore terminal state cleanly (Review Focus #5)
+    // always restore terminal state cleanly on panic
     let orig_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore_terminal();
@@ -284,7 +104,6 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
         settings: settings.clone(),
     });
 
-    // SIGINT / SIGTERM / MPRIS graceful shutdown coordination
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let shutdown_notify = Arc::new(Notify::new());
 
@@ -305,11 +124,10 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
         ..CavaControl::default()
     });
 
-    // Background Cache Janitor (every 15 minutes; offloaded to blocking pool)
     let janitor_cache = cache.clone();
     let janitor_task = tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
-        interval.tick().await; // skip immediate tick
+        interval.tick().await;
         loop {
             interval.tick().await;
             let c = janitor_cache.clone();
@@ -317,7 +135,6 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
         }
     });
 
-    // Enter TUI alternate screen and detect terminal graphics protocol
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
@@ -328,7 +145,8 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
 
     let sync_worker_engine = sync.clone();
     let sync_worker_auth = auth.clone();
-    let sync_period = settings.sync.auto_sync_interval_secs.max(60);
+    let initial_sync_period = settings.sync.auto_sync_interval_secs.max(60);
+    let (sync_interval_tx, mut sync_interval_rx) = watch::channel(initial_sync_period);
 
     let mut app = App::new(
         AppServices {
@@ -347,20 +165,28 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
         covers,
     );
     app.attach_mpris(mpris, shutdown_flag.clone());
+    app.attach_sync_interval_tx(sync_interval_tx);
 
-    // Background Opt-In Sync Worker (default 5 minutes; strict no-op when Anonymous)
     let sync_bg_tx = app.bg_sender();
     let sync_task = tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(sync_period));
-        interval.tick().await;
+        let mut period = initial_sync_period;
         loop {
-            interval.tick().await;
-            if sync_worker_auth.is_authenticated() {
-                let res = sync_worker_engine
-                    .sync_now()
-                    .await
-                    .map_err(|e| e.to_string());
-                let _ = sync_bg_tx.send(BgMsg::SyncFinished(res));
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(period)) => {
+                    if sync_worker_auth.is_authenticated() {
+                        let res = sync_worker_engine
+                            .sync_now()
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = sync_bg_tx.send(BgMsg::SyncFinished(res));
+                    }
+                }
+                changed = sync_interval_rx.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    period = (*sync_interval_rx.borrow_and_update()).max(60);
+                }
             }
         }
     });
@@ -395,8 +221,6 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
         }
     });
 
-    // Dedicated terminal input reader thread so Tokio select! wakes at 0ms latency
-    // on keypresses, background results, engine/cava updates, or OS signals.
     let input_stop = Arc::new(AtomicBool::new(false));
     let input_stop_clone = input_stop.clone();
     let (input_tx, mut input_rx) = mpsc::channel::<Event>(64);
@@ -425,16 +249,24 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
     let mut anim_tick = tokio::time::interval(Duration::from_millis(80));
     anim_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-    // Zero-latency reactive event loop (80ms spinner/cava tick only while active)
+    let mut last_draw = Instant::now() - MIN_FRAME_INTERVAL;
+    let mut needs_redraw = true;
+
     loop {
-        app.poll_engine_and_bg();
-        terminal.draw(|f| app.render(f))?;
+        if needs_redraw {
+            app.poll_engine_and_bg();
+            terminal.draw(|f| app.render(f))?;
+            last_draw = Instant::now();
+            needs_redraw = false;
+        }
 
         if app.should_quit || shutdown_flag.load(Ordering::SeqCst) {
             break;
         }
 
         let animating = app.is_animating();
+        let since_draw = last_draw.elapsed();
+        let pace_wait = MIN_FRAME_INTERVAL.saturating_sub(since_draw);
         let idle_sleep = tokio::time::sleep(Duration::from_millis(250));
         tokio::pin!(idle_sleep);
 
@@ -445,6 +277,7 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
                     while let Ok(ev2) = input_rx.try_recv() {
                         handle_term_event(&mut app, ev2);
                     }
+                    needs_redraw = true;
                 } else {
                     break;
                 }
@@ -452,18 +285,36 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
             maybe_bg = app.recv_bg() => {
                 if let Some(msg) = maybe_bg {
                     app.handle_bg_msg(msg);
+                    needs_redraw = true;
                 }
             }
-            _ = snap_rx.changed() => {}
-            _ = pos_rx.changed() => {}
-            _ = queue_rx.changed() => {}
-            _ = lyrics_rx.changed() => {}
-            _ = cava_rx.changed(), if animating => {}
+            _ = snap_rx.changed() => {
+                needs_redraw = true;
+            }
+            _ = queue_rx.changed() => {
+                needs_redraw = true;
+            }
+            _ = lyrics_rx.changed() => {
+                needs_redraw = true;
+            }
+            _ = pos_rx.changed(), if pace_wait.is_zero() => {
+                needs_redraw = true;
+            }
+            _ = cava_rx.changed(), if animating && pace_wait.is_zero() => {
+                needs_redraw = true;
+            }
+            _ = tokio::time::sleep(pace_wait), if !pace_wait.is_zero() && (animating || pos_rx.has_changed().unwrap_or(false) || cava_rx.has_changed().unwrap_or(false)) => {
+                let _ = pos_rx.borrow_and_update();
+                let _ = cava_rx.borrow_and_update();
+                needs_redraw = true;
+            }
             _ = anim_tick.tick(), if animating => {
                 app.on_tick();
+                needs_redraw = true;
             }
             _ = &mut idle_sleep, if !animating => {
                 app.on_tick();
+                needs_redraw = true;
             }
             _ = shutdown_notify.notified() => {
                 break;
@@ -471,7 +322,7 @@ async fn run_tui(paths: AppPaths, settings: Settings) -> Result<(), Box<dyn std:
         }
     }
 
-    // Clean teardown: stop input thread, restore terminal, stop mpv, stop cava, stop MPRIS & workers
+    app.flush_pending_saves();
     input_stop.store(true, Ordering::SeqCst);
     let _ = input_thread.join();
     restore_terminal();

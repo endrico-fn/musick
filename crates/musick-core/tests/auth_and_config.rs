@@ -4,8 +4,8 @@ use std::fs;
 use tempfile::tempdir;
 
 use musick_core::{
-    AppPaths, AuthMode, CoverSize, ImageProtocol, Settings, Thumb, atomic_write_text,
-    best_thumb_url, clean_media_title, format_duration,
+    AppPaths, AuthMode, CacheManager, CacheSettings, CavaAudioSource, ImageProtocol, Settings,
+    Thumb, atomic_write_text, best_thumb_url, clean_media_title, format_duration,
 };
 
 #[test]
@@ -40,6 +40,7 @@ legacy_unused_key = "ignored"
 [display]
 cover_size = "L"
 image_protocol = "tgp"
+cava_audio_source = "monitor"
 region = "US"
 
 [player]
@@ -52,11 +53,41 @@ cache_secs = 2
     assert!(loaded.privacy.save_history);
     assert!(!loaded.privacy.remote_suggestions);
     assert!(!loaded.privacy.report_playback_history);
-    assert_eq!(loaded.display.cover_size, CoverSize::L);
     assert_eq!(loaded.display.image_protocol, ImageProtocol::Kitty);
+    assert_eq!(
+        loaded.display.cava_audio_source,
+        CavaAudioSource::PulseMonitor
+    );
     assert_eq!(loaded.display.region, "US");
     assert_eq!(loaded.player.volume, 130);
     assert_eq!(loaded.player.cache_secs, 5);
+
+    // legacy cava_audio_source = "off" falls back cleanly to Auto
+    let legacy_off = Settings::from_toml_str("[display]\ncava_audio_source = \"off\"\n");
+    assert_eq!(legacy_off.display.cava_audio_source, CavaAudioSource::Auto);
+}
+
+#[test]
+fn disabling_cache_bypasses_and_clears_l1_in_memory_cache() {
+    let dir = tempdir().unwrap();
+    let paths = AppPaths::from_roots(
+        dir.path().join("cfg"),
+        dir.path().join("data"),
+        dir.path().join("cache"),
+        dir.path().join("rt"),
+    );
+    let cache = CacheManager::open(&paths, CacheSettings::default()).unwrap();
+    cache.put_catalog("k1", &"hello".to_string(), None);
+    assert_eq!(cache.get_catalog::<String>("k1").as_deref(), Some("hello"));
+
+    let disabled = CacheSettings {
+        enabled: false,
+        ..CacheSettings::default()
+    };
+    cache.update_settings(disabled);
+    assert_eq!(cache.get_catalog::<String>("k1"), None);
+    cache.put_catalog("k2", &"world".to_string(), None);
+    assert_eq!(cache.get_catalog::<String>("k2"), None);
 }
 
 #[test]
@@ -259,6 +290,23 @@ origin: https://music.youtube.com
         assert_eq!(creds2.sapisid().as_deref(), Some("direct_sapisid_99"));
         assert_eq!(creds2.auth_user, "0");
         assert!(creds2.page_id.is_none());
+
+        // Chrome "Copy as cURL" uses `-b '...'` / `--cookie '...'`, and untrusted origins are sanitized
+        let chrome_curl = "\
+curl 'https://music.youtube.com/youtubei/v1/browse' \\
+  -H 'origin: https://evil.example' \\
+  -b 'HSID=1; __Secure-3PAPISID=chrome_b_tok; SID=2' \\
+  -H 'x-goog-authuser: 1'
+";
+        let creds3 = parse_browser_headers(chrome_curl).unwrap();
+        assert_eq!(creds3.sapisid().as_deref(), Some("chrome_b_tok"));
+        assert_eq!(creds3.auth_user, "1");
+        assert_eq!(creds3.origin, YTM_ORIGIN);
+
+        let single_line = "curl 'https://music.youtube.com/' --cookie 'SAPISID=single_tok; SID=x' -H 'origin: https://www.youtube.com'";
+        let creds4 = parse_browser_headers(single_line).unwrap();
+        assert_eq!(creds4.sapisid().as_deref(), Some("single_tok"));
+        assert_eq!(creds4.origin, "https://www.youtube.com");
 
         assert!(parse_browser_headers("VISITOR_INFO1_LIVE=no_sapisid").is_err());
     }

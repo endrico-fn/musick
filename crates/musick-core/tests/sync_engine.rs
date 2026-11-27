@@ -8,7 +8,7 @@ use tempfile::tempdir;
 
 use musick_core::{
     Album, AlbumSummary, AppPaths, Artist, ArtistSummary, AuthManager, CatalogApi, CoreError,
-    CoreResult, HomeFeed, Lyrics, MemorySecretStore, PlaybackTelemetryEvent, PlaybackTracking,
+    CoreResult, DiscoverFeed, Lyrics, MemorySecretStore, PlaybackTelemetryEvent, PlaybackTracking,
     Playlist, PlaylistEditAction, PlaylistEditResult, PlaylistSource, PlaylistSummary, RadioBatch,
     SavedCollectionKind, SearchCategory, SearchItem, SongRating, SyncEngine, Track, UserStore,
 };
@@ -16,6 +16,7 @@ use musick_core::{
 #[derive(Default)]
 struct MockState {
     offline: bool,
+    auth_expired: bool,
     fail_edits_for: Option<String>,
     playlists: HashMap<String, Playlist>,
     liked_songs: Vec<Track>,
@@ -63,8 +64,8 @@ impl MockCatalog {
 
 #[async_trait]
 impl CatalogApi for MockCatalog {
-    async fn home_feed(&self, _region: &str) -> CoreResult<HomeFeed> {
-        Ok(HomeFeed::default())
+    async fn discover_feed(&self, _region: &str) -> CoreResult<DiscoverFeed> {
+        Ok(DiscoverFeed::default())
     }
     async fn search(
         &self,
@@ -83,7 +84,7 @@ impl CatalogApi for MockCatalog {
     async fn artist_releases(
         &self,
         _browse_id: &str,
-        _params: &str,
+        _params: Option<&str>,
         _kind: &str,
     ) -> CoreResult<Vec<AlbumSummary>> {
         Ok(Vec::new())
@@ -145,6 +146,9 @@ impl CatalogApi for MockCatalog {
         video_ids: &[String],
     ) -> CoreResult<String> {
         let mut st = self.state.lock().unwrap();
+        if st.auth_expired {
+            return Err(CoreError::Auth("HTTP 401 unauthorized".into()));
+        }
         if st.offline {
             return Err(CoreError::Catalog("offline".into()));
         }
@@ -443,4 +447,67 @@ async fn pull_preserves_local_playlists_downgrades_deleted_remote_with_pending_e
         catalog.state.lock().unwrap().saved_playlist_ops,
         vec![("RDCLAK5uy_comm1".to_string(), true)]
     );
+}
+
+#[tokio::test]
+async fn classifies_community_playlists_caps_outbox_retries_and_flags_auth_expiry() {
+    let (_dir, store, catalog, auth, sync) = setup();
+    auth.import_browser_headers("cookie: SAPISID=tok_cls", None)
+        .unwrap();
+
+    // 1. Owned PL* -> UserPlaylist; Community RDCLAK* -> SavedCollectionKind::Playlist
+    catalog.seed_playlist(
+        "PL_OWNED_1",
+        "My Mix",
+        vec![Track::minimal("t1", "Owned Song")],
+    );
+    catalog.seed_playlist(
+        "RDCLAK5uy_editorial",
+        "Editorial Mix",
+        vec![Track::minimal("t2", "Editorial Song")],
+    );
+    let rep = sync.sync_now().await.unwrap();
+    assert_eq!(rep.pulled_playlists, 1);
+    assert_eq!(rep.pulled_saved_playlists, 1);
+    let acct = auth.account_key();
+    assert!(
+        store
+            .get_playlist_by_remote_id(&acct, "PL_OWNED_1")
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .get_playlist_by_remote_id(&acct, "RDCLAK5uy_editorial")
+            .unwrap()
+            .is_none()
+    );
+    let saved_pls = store
+        .list_saved_collections(&acct, SavedCollectionKind::Playlist)
+        .unwrap();
+    assert!(
+        saved_pls
+            .iter()
+            .any(|c| c.browse_id == "RDCLAK5uy_editorial")
+    );
+
+    // 2. Retry cap stops retrying permanently failing outbox ops after MAX_OUTBOX_RETRIES
+    catalog.set_offline(true);
+    let _pl = sync.create_playlist("Flaky", "", true).unwrap();
+    for _ in 0..musick_core::sync::MAX_OUTBOX_RETRIES {
+        let r = sync.sync_now().await.unwrap();
+        assert_eq!(r.failed, 1);
+        assert_eq!(r.skipped_exhausted, 0);
+    }
+    let exhausted = sync.sync_now().await.unwrap();
+    assert_eq!(exhausted.failed, 0);
+    assert_eq!(exhausted.skipped_exhausted, 1);
+
+    // 3. 401/Auth error sets report.auth_expired = true and halts outbox loop
+    catalog.set_offline(false);
+    catalog.state.lock().unwrap().auth_expired = true;
+    let _pl2 = sync.create_playlist("Needs Reauth", "", true).unwrap();
+    let auth_rep = sync.sync_now().await.unwrap();
+    assert!(auth_rep.auth_expired);
+    assert_eq!(auth_rep.failed, 1);
 }
